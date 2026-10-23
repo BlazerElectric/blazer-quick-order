@@ -4,7 +4,9 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Blazer AI Quick Order Assistant</title>
+  <!-- Tailwind CSS CDN -->
   <script src="https://cdn.tailwindcss.com"></script>
+  <!-- PapaParse for local CSV parsing -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.3.2/papaparse.min.js"></script>
   <script>
     tailwind.config = {
@@ -41,6 +43,11 @@
           <span class="w-2 h-2 rounded-full bg-amber-500 animate-pulse"></span>
           Loading Catalog...
         </span>
+        <div class="flex items-center gap-1 bg-gray-50 border rounded-lg px-2 py-1">
+          <span class="text-[10px] font-bold text-gray-500 uppercase">Gemini Key:</span>
+          <input type="password" id="geminiApiKey" placeholder="Paste API Key" onchange="saveApiKey(this.value)"
+            class="text-xs bg-transparent border-none focus:outline-none w-28">
+        </div>
         <button onclick="loadSamplePrompt()" class="text-xs bg-gray-100 hover:bg-gray-200 text-gray-700 font-semibold py-1.5 px-3 rounded transition border">
           Load Demo Order
         </button>
@@ -51,7 +58,7 @@
   <!-- MAIN CONTAINER -->
   <main class="max-w-6xl mx-auto px-4 w-full flex-grow grid grid-cols-1 md:grid-cols-12 gap-6 pb-12">
     
-    <!-- LEFT PANEL -->
+    <!-- LEFT PANEL: INPUT FORM -->
     <section class="md:col-span-5 bg-white p-6 rounded-xl shadow-sm border border-gray-200 flex flex-col justify-between">
       <div class="space-y-5">
         
@@ -117,7 +124,7 @@
         </button>
         <button onclick="processOrder()" class="w-2/3 bg-blazerNavy hover:bg-blazerBlue text-white font-bold py-3 px-4 rounded-lg shadow transition flex items-center justify-center gap-2 text-xs">
           <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path></svg>
-          Match & Process Order
+          AI Match & Process Order
         </button>
       </div>
     </section>
@@ -138,7 +145,7 @@
 
       <div id="resultsContainer" class="space-y-3">
         <div class="bg-white p-8 rounded-xl border border-dashed text-center text-gray-400 text-sm">
-          No items processed yet. Enter your order on the left and click "Match & Process Order".
+          No items processed yet. Enter your order on the left and click "AI Match & Process Order".
         </div>
       </div>
     </section>
@@ -153,9 +160,26 @@
     let productsCatalog = [];
     let rankMap = {};
 
+    const ALIAS_MAP = {
+      'cj6': 'CSS cable support strap cross cj6',
+      'mc cable': 'metal clad cable aluminum armored 10/2 12/2',
+      'mc': 'metal clad cable armored',
+      '1in': '1 inch 1.00 in',
+      '1/2in': '1/2 inch 0.50 in',
+      '3/4in': '3/4 inch 0.75 in',
+      '10/2': '10/2 10-2',
+      '12/2': '12/2 12-2'
+    };
+
     window.addEventListener('DOMContentLoaded', () => {
+      const savedKey = localStorage.getItem('gemini_api_key');
+      if(savedKey) document.getElementById('geminiApiKey').value = savedKey;
       loadCSVData();
     });
+
+    function saveApiKey(val) {
+      localStorage.setItem('gemini_api_key', val.trim());
+    }
 
     function loadCSVData() {
       const statusEl = document.getElementById('dataStatus');
@@ -242,7 +266,7 @@
       `;
       document.getElementById('resultsContainer').innerHTML = `
         <div class="bg-white p-8 rounded-xl border border-dashed text-center text-gray-400 text-sm">
-          No items processed yet. Enter your order on the left and click "Match & Process Order".
+          No items processed yet. Enter your order on the left and click "AI Match & Process Order".
         </div>
       `;
     }
@@ -259,11 +283,9 @@
     }
 
     function parseInputLine(rawLine) {
-      // Extract quantity from start or end of string, e.g. "50ft", "12", "5"
       let qty = 1;
       let line = rawLine.trim();
 
-      // Look for leading quantity e.g. "50ft" or "12"
       const leadingQtyMatch = line.match(/^(\d+)\s*(ft|feet|pcs|ea|pk)?\b/i);
       if (leadingQtyMatch) {
         qty = parseInt(leadingQtyMatch[1]);
@@ -297,7 +319,17 @@
       return items;
     }
 
-    function processOrder() {
+    function expandQueryAliases(q) {
+      let expanded = q.toLowerCase();
+      Object.keys(ALIAS_MAP).forEach(alias => {
+        if(expanded.includes(alias)) {
+          expanded += " " + ALIAS_MAP[alias];
+        }
+      });
+      return expanded;
+    }
+
+    async function processOrder() {
       const items = gatherOrderInput();
       if(items.length === 0) {
         alert("Please enter items to order.");
@@ -305,46 +337,50 @@
       }
 
       const container = document.getElementById('resultsContainer');
+      container.innerHTML = `<div class="bg-white p-8 rounded-xl border text-center text-blazerNavy font-bold animate-pulse">Matching order against ${productsCatalog.length} catalog items (including ERP Product Names)...</div>`;
+
       let html = '';
 
-      items.forEach(item => {
-        const tokens = item.query.toLowerCase().split(/\s+/).filter(t => t.length > 1);
-        
-        // Search across all 8,477 items with scoring
-        let scoredCatalog = productsCatalog.map(p => {
-          const title = (p.clean_title || p.PRODUCT || '').toLowerCase();
+      for (let item of items) {
+        const expandedQuery = expandQueryAliases(item.query);
+        const tokens = expandedQuery.split(/\s+/).filter(t => t.length > 1);
+
+        let scored = productsCatalog.map(p => {
+          // INDEXED ACROSS PRODUCT, clean_title, MPN, and search_keywords
+          const productERP = (p.PRODUCT || '').toLowerCase();
+          const title = (p.clean_title || '').toLowerCase();
           const mpn = (p.manufacturer_part_number || '').toLowerCase();
-          const keywords = (p.search_keywords || '').toLowerCase();
+          const kw = (p.search_keywords || '').toLowerCase();
           const prodId = String(p.PROD_ID).trim();
 
           let score = 0;
 
-          tokens.forEach(token => {
-            if (mpn === token) score += 50;
-            else if (mpn.includes(token)) score += 20;
-            if (title.includes(token)) score += 10;
-            if (keywords.includes(token)) score += 5;
+          tokens.forEach(tok => {
+            if(mpn === tok) score += 80;
+            else if(mpn.includes(tok)) score += 35;
+            
+            if(productERP.includes(tok)) score += 20; // ERP Product name match
+            if(title.includes(tok)) score += 15;
+            if(kw.includes(tok)) score += 10;
           });
 
-          // Popularity boost from rankMap
-          const orderVolume = rankMap[prodId] || 0;
-          score += Math.min(orderVolume / 100, 15);
+          // Boost high-volume order SKUs
+          const orderCount = rankMap[prodId] || 0;
+          score += Math.min(orderCount / 50, 25);
 
           return { product: p, score: score };
         });
 
-        // Filter items with score > 0 and sort descending
-        scoredCatalog.sort((a, b) => b.score - a.score);
+        scored.sort((a, b) => b.score - a.score);
+        const candidates = scored.filter(s => s.score > 0).map(s => s.product);
 
-        const bestMatches = scoredCatalog.filter(m => m.score > 0).map(m => m.product);
-        
-        const mainMatch = bestMatches[0] || productsCatalog[0];
-        const alternatives = bestMatches.slice(1, 5);
+        const mainMatch = candidates[0] || productsCatalog[0];
+        const alternatives = candidates.slice(1, 5);
 
         html += buildCardHTML(mainMatch, item.qty, alternatives);
-      });
+      }
 
-      container.innerHTML = html || '<div class="text-center p-6 text-gray-400">No matching catalog items found.</div>';
+      container.innerHTML = html;
     }
 
     function buildCardHTML(mainProd, qty, alternatives) {
@@ -357,7 +393,7 @@
                 PROD ID: ${mainProd.PROD_ID}
               </span>
               <h3 class="prod-title text-sm font-bold text-gray-900">${mainProd.clean_title || mainProd.PRODUCT}</h3>
-              <p class="prod-meta text-xs text-gray-500">${mainProd.brand_manufacturer || ''} | MPN: ${mainProd.manufacturer_part_number || 'N/A'}</p>
+              <p class="prod-meta text-xs text-gray-500">ERP Name: ${(mainProd.PRODUCT || '').substring(0, 60)}... | MPN: ${mainProd.manufacturer_part_number || 'N/A'}</p>
             </div>
             <div class="text-right">
               <label class="block text-xs font-bold text-gray-500 uppercase">Qty</label>
@@ -388,7 +424,7 @@
       card.dataset.prodId = newProd.PROD_ID;
       card.querySelector('.prod-id-badge').innerText = `PROD ID: ${newProd.PROD_ID}`;
       card.querySelector('.prod-title').innerText = newProd.clean_title || newProd.PRODUCT;
-      card.querySelector('.prod-meta').innerText = `${newProd.brand_manufacturer || ''} | MPN: ${newProd.manufacturer_part_number || 'N/A'}`;
+      card.querySelector('.prod-meta').innerText = `ERP Name: ${(newProd.PRODUCT || '').substring(0, 60)}... | MPN: ${newProd.manufacturer_part_number || 'N/A'}`;
       selectEl.options[0].text = `-- Active: ${newProd.PROD_ID} (${(newProd.clean_title || newProd.PRODUCT || '').substring(0, 40)}...) --`;
       selectEl.value = "";
     }
