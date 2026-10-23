@@ -1,0 +1,125 @@
+import express, { Request, Response } from 'express';
+import dotenv from 'dotenv';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import { GoogleGenAI } from '@google/genai';
+
+dotenv.config();
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+const app = express();
+const port = parseInt(process.env.PORT || '3000', 10);
+
+app.use(express.json({ limit: '10mb' }));
+
+// Health check endpoint
+app.get('/api/health', (_req: Request, res: Response) => {
+  res.json({ status: 'ok', hasGeminiKey: Boolean(process.env.GEMINI_API_KEY) });
+});
+
+// AI Order Parsing endpoint
+app.post('/api/parse-order', async (req: Request, res: Response) => {
+  const { text, jobContext } = req.body;
+  if (!text || typeof text !== 'string') {
+    return res.status(400).json({ error: 'Text prompt is required' });
+  }
+
+  const apiKey = process.env.GEMINI_API_KEY;
+
+  if (!apiKey) {
+    // If no API key is provided, indicate client fallback
+    return res.json({
+      success: false,
+      message: 'GEMINI_API_KEY not configured, using built-in deterministic parser.',
+      items: null,
+    });
+  }
+
+  try {
+    const ai = new GoogleGenAI();
+    const systemPrompt = `You are an expert electrical contractor order parsing assistant for Blazer Electric Supply Company.
+Given an electrical contractor's order notes or material request list, extract each distinct electrical item into a structured list.
+Extract:
+- query: A clean, descriptive search term for the electrical catalog (e.g., "10/2 MC cable", "Caddy CJ6 cable support", "1 in EMT compression connector", "1/2 inch EMT set screw connector"). Include relevant trade names, gauges, voltages, or dimensions.
+- qty: The numerical quantity (e.g., 50, 12, 5). Default to 1 if not specified.
+- unit: The unit of measure if mentioned (e.g., "ft", "pcs", "boxes", "rolls", "spools", "ea").
+- originalText: The exact snippet from the input text.
+
+Job context if provided: "${jobContext || 'General electrical construction'}".
+
+Return ONLY a valid JSON object matching this schema:
+{
+  "items": [
+    {
+      "query": "string",
+      "qty": number,
+      "unit": "string",
+      "originalText": "string"
+    }
+  ]
+}`;
+
+    const response = await ai.models.generateContent({
+      model: 'gemini-3.8-flash',
+      contents: [
+        {
+          role: 'user',
+          parts: [
+            { text: systemPrompt },
+            { text: `Contractor Order Text:\n${text}` },
+          ],
+        },
+      ],
+      config: {
+        responseMimeType: 'application/json',
+      },
+    });
+
+    const responseText = response.text || '{}';
+    const parsedData = JSON.parse(responseText);
+
+    return res.json({
+      success: true,
+      items: parsedData.items || [],
+      usedAi: true,
+    });
+  } catch (error: any) {
+    console.error('Gemini parsing error:', error?.message || error);
+    return res.json({
+      success: false,
+      error: error?.message || 'Gemini error',
+      items: null,
+    });
+  }
+});
+
+// Setup Vite or static serving
+async function startServer() {
+  const isProd = process.env.NODE_ENV === 'production';
+
+  if (!isProd) {
+    const { createServer: createViteServer } = await import('vite');
+    const vite = await createViteServer({
+      server: { middlewareMode: true, host: '0.0.0.0', port },
+      appType: 'spa',
+    });
+    app.use(vite.middlewares);
+  } else {
+    const distPath = path.resolve(__dirname, 'dist');
+    app.use(express.static(distPath));
+    app.get('*', (_req, res) => {
+      res.sendFile(path.resolve(distPath, 'index.html'));
+    });
+  }
+
+  app.listen(port, '0.0.0.0', () => {
+    console.log(`Blazer Quick Order running at http://0.0.0.0:${port}`);
+  });
+}
+
+startServer().catch((err) => {
+  console.error('Failed to start server:', err);
+  process.exit(1);
+});

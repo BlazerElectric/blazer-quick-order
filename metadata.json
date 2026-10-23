@@ -1,0 +1,7 @@
+{
+  "name": "Blazer AI Quick Order Assistant",
+  "description": "Fast natural language contractor order entry and catalog matching for Blazer Electric Supply Company.",
+  "capabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
