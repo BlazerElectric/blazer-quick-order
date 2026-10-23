@@ -1,0 +1,643 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Quick Order Assistant | Blazer Electric Supply</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- PapaParse CDN for CSV parsing -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.3.2/papaparse.min.js"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        blazerNavy: '#002d72',
+                        blazerNavyHover: '#1e3a8a',
+                        blazerAccent: '#d97706',
+                        blazerRed: '#e11d48',
+                        blazerBg: '#f4f6f8'
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        body {
+            background-color: #f4f6f8;
+            font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+        }
+    </style>
+</head>
+<body class="min-h-screen text-slate-800 flex flex-col justify-between">
+
+    <!-- Header -->
+    <header class="bg-white border-b border-slate-200 shadow-sm sticky top-0 z-30">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-3 flex flex-col sm:flex-row items-center justify-between gap-4">
+            <div class="flex items-center space-x-3">
+                <!-- Logo fallback handled via onerror -->
+                <img src="Blazer-Blue.jpg" alt="Blazer Electric Supply" class="h-10 w-auto object-contain" onerror="this.src='https://www.buyblazer.com/images/content/footer-logo.png';">
+                <div class="border-l border-slate-300 pl-3">
+                    <h1 class="text-lg sm:text-xl font-bold text-blazerNavy tracking-tight flex items-center gap-2">
+                        AI Quick Order Assistant
+                        <span class="text-xs px-2 py-0.5 rounded-full bg-amber-100 text-blazerAccent font-semibold border border-amber-200">B2B Pro</span>
+                    </h1>
+                </div>
+            </div>
+            
+            <div class="flex items-center gap-3">
+                <div id="dataset-status" class="text-xs bg-slate-100 px-3 py-1.5 rounded-md border border-slate-200 text-slate-600 flex items-center gap-2">
+                    <span class="w-2 h-2 rounded-full bg-amber-500 animate-pulse" id="status-dot"></span>
+                    <span id="status-text">Loading Catalog Data...</span>
+                </div>
+                <button onclick="loadSamplePrompt()" class="text-xs bg-blazerNavy/10 hover:bg-blazerNavy/20 text-blazerNavy font-semibold px-3 py-1.5 rounded-md transition-colors">
+                    Load Demo Order
+                </button>
+            </div>
+        </div>
+    </header>
+
+    <!-- Main Container -->
+    <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 flex-grow w-full space-y-6">
+
+        <!-- Job Context Box & Input Mode Selector Card -->
+        <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-5 space-y-4">
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <!-- Job Context -->
+                <div>
+                    <label class="block text-xs font-bold uppercase tracking-wider text-slate-600 mb-1.5" for="job-context">
+                        Job / Project Context
+                    </label>
+                    <input type="text" id="job-context" placeholder="e.g. Residential 200A Service Upgrade, Commercial Office Trim" 
+                        class="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blazerNavy focus:bg-white transition-all">
+                </div>
+                <!-- Mode Selector Tabs -->
+                <div>
+                    <label class="block text-xs font-bold uppercase tracking-wider text-slate-600 mb-1.5">
+                        Input Method
+                    </label>
+                    <div class="grid grid-cols-3 gap-1 bg-slate-100 p-1 rounded-lg border border-slate-200 text-xs font-medium">
+                        <button onclick="switchMode('text')" id="tab-text" class="py-2 rounded-md bg-white text-blazerNavy shadow-sm font-semibold transition-all">
+                            Text / Voice
+                        </button>
+                        <button onclick="switchMode('table')" id="tab-table" class="py-2 rounded-md text-slate-600 hover:text-slate-900 transition-all">
+                            Quick Table
+                        </button>
+                        <button onclick="switchMode('upload')" id="tab-upload" class="py-2 rounded-md text-slate-600 hover:text-slate-900 transition-all">
+                            File Upload
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Mode 1: Text / Voice Input -->
+            <div id="mode-text-container" class="space-y-3 pt-2">
+                <div class="flex justify-between items-center">
+                    <label for="order-textarea" class="text-sm font-semibold text-slate-700">
+                        Paste Order List or Describe Materials in Natural Language:
+                    </label>
+                    <span class="text-xs text-slate-400">Tip: Include quantities (e.g., "50ft 10/2 MC cable, 12 Caddy CJ6")</span>
+                </div>
+                <textarea id="order-textarea" rows="4" 
+                    placeholder="e.g., 50ft 10/2 MC cable, 12 Caddy CJ6, 5 1in EMT connectors, 200 amp breaker QO"
+                    class="w-full p-3.5 bg-slate-50 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blazerNavy focus:bg-white transition-all font-mono"></textarea>
+            </div>
+
+            <!-- Mode 2: Quick Order Table -->
+            <div id="mode-table-container" class="hidden space-y-3 pt-2">
+                <div class="flex justify-between items-center">
+                    <span class="text-sm font-semibold text-slate-700">Multi-Row Quick Order Items:</span>
+                    <button onclick="addTableItemRow()" class="text-xs bg-slate-100 hover:bg-slate-200 text-blazerNavy font-semibold px-3 py-1.5 rounded-md border border-slate-200 transition-colors">
+                        + Add Row
+                    </button>
+                </div>
+                <div class="overflow-x-auto border border-slate-200 rounded-lg">
+                    <table class="w-full text-left text-sm" id="quick-order-table">
+                        <thead class="bg-slate-100 text-slate-600 uppercase text-xs">
+                            <tr>
+                                <th class="p-3">Product Description / Specs / Part #</th>
+                                <th class="p-3 w-32">Quantity</th>
+                                <th class="p-3 w-16 text-center">Action</th>
+                            </tr>
+                        </thead>
+                        <tbody id="table-rows-body" class="divide-y divide-slate-200 bg-white">
+                            <!-- Rows injected dynamically -->
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- Mode 3: File Upload -->
+            <div id="mode-upload-container" class="hidden space-y-3 pt-2">
+                <div class="border-2 border-dashed border-slate-300 rounded-lg p-6 text-center hover:border-blazerNavy transition-colors bg-slate-50 cursor-pointer" onclick="document.getElementById('file-input').click()">
+                    <input type="file" id="file-input" class="hidden" accept=".csv,.txt,image/*" onchange="handleFileUpload(event)">
+                    <div class="mx-auto flex flex-col items-center space-y-2">
+                        <svg class="w-10 h-10 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/>
+                        </svg>
+                        <div class="text-sm font-medium text-slate-700">
+                            Drop your CSV, TXT, or PO document here, or <span class="text-blazerNavy underline">browse files</span>
+                        </div>
+                        <p class="text-xs text-slate-400" id="file-name-display">Supports structured lists, purchase orders, or item requirements</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Process Button Bar -->
+            <div class="flex items-center justify-end pt-2 border-t border-slate-100 gap-3">
+                <button onclick="processOrderInput()" id="process-btn" class="bg-blazerNavy hover:bg-blazerNavyHover text-white px-6 py-2.5 rounded-lg text-sm font-semibold shadow-sm transition-all flex items-center gap-2">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
+                    </svg>
+                    AI Match & Process Order
+                </button>
+            </div>
+        </div>
+
+        <!-- Results Section Container -->
+        <div id="results-section" class="space-y-4 hidden">
+            <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 bg-white p-4 rounded-xl shadow-sm border border-slate-200">
+                <div>
+                    <h2 class="text-lg font-bold text-slate-800 flex items-center gap-2">
+                        <span>Matched Order Line Items</span>
+                        <span id="match-count-badge" class="text-xs bg-blue-100 text-blazerNavy px-2.5 py-0.5 rounded-full font-bold">0 Items</span>
+                    </h2>
+                    <p class="text-xs text-slate-500 mt-0.5" id="context-display-text">Review AI-matched catalog items, verify quantities, or swap alternatives before sending to cart.</p>
+                </div>
+                <div class="flex items-center gap-2 w-full sm:w-auto">
+                    <button onclick="copyRawStringToClipboard()" class="flex-1 sm:flex-none bg-slate-100 hover:bg-slate-200 text-slate-700 px-4 py-2 rounded-lg text-sm font-semibold border border-slate-200 transition-colors flex items-center justify-center gap-2">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3"/>
+                        </svg>
+                        Copy Raw String
+                    </button>
+                    <button onclick="addAllToBuyBlazerCart()" class="flex-1 sm:flex-none bg-blazerAccent hover:bg-amber-600 text-white px-5 py-2 rounded-lg text-sm font-semibold shadow-sm transition-all flex items-center justify-center gap-2">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 3h2l.4 2M7 13h10l4-8H5.4M7 13L5.4 5M7 13l-2.293 2.293c-.63.63-.184 1.707.707 1.707H17m0 0a2 2 0 100 4 2 2 0 000-4zm-8 2a2 2 0 11-4 0 2 2 0 014 0z"/>
+                        </svg>
+                        Add All to BuyBlazer Cart
+                    </button>
+                </div>
+            </div>
+
+            <!-- Dynamic Product Result Cards List -->
+            <div id="product-cards-container" class="space-y-4">
+                <!-- Cards injected dynamically -->
+            </div>
+        </div>
+
+    </main>
+
+    <!-- Footer -->
+    <footer class="bg-white border-t border-slate-200 mt-12 py-6 text-center text-xs text-slate-500">
+        <div class="max-w-7xl mx-auto px-4 space-y-2">
+            <p>&copy; 2026 Blazer Electric Supply Company. All rights reserved. | B2B Quick Order Assistant</p>
+            <p class="text-slate-400">Locations: Colorado Springs | Pueblo | Grand Junction</p>
+        </div>
+    </footer>
+
+    <!-- Application JavaScript Logic -->
+    <script>
+        let productsData = [];
+        let webRankData = [];
+        let combinedCatalog = [];
+        let currentMatches = []; // Holds current session order items: { index, queryText, requestedQty, selectedProdId, matchedProduct, alternatives }
+
+        // Initialize App on Load
+        window.addEventListener('DOMContentLoaded', () => {
+            initializeTableRows();
+            loadDatasets();
+        });
+
+        // Switch Tabs
+        function switchMode(mode) {
+            ['text', 'table', 'upload'].forEach(m => {
+                const btn = document.getElementById(`tab-${m}`);
+                const container = document.getElementById(`mode-${m}-container`);
+                if (m === mode) {
+                    btn.className = "py-2 rounded-md bg-white text-blazerNavy shadow-sm font-semibold transition-all";
+                    container.classList.remove('hidden');
+                } else {
+                    btn.className = "py-2 rounded-md text-slate-600 hover:text-slate-900 transition-all";
+                    container.classList.add('hidden');
+                }
+            });
+        }
+
+        // Quick Order Table Row Management
+        function initializeTableRows() {
+            const tbody = document.getElementById('table-rows-body');
+            tbody.innerHTML = '';
+            for (let i = 0; i < 3; i++) {
+                addTableItemRow();
+            }
+        }
+
+        function addTableItemRow() {
+            const tbody = document.getElementById('table-rows-body');
+            const tr = document.createElement('tr');
+            tr.className = "hover:bg-slate-50/50";
+            tr.innerHTML = `
+                <td class="p-2.5">
+                    <input type="text" placeholder="e.g. 10/2 MC Cable or Hubbell Receptacle" class="table-item-desc w-full px-3 py-1.5 bg-slate-50 border border-slate-300 rounded text-sm focus:outline-none focus:ring-1 focus:ring-blazerNavy focus:bg-white">
+                </td>
+                <td class="p-2.5">
+                    <input type="number" min="1" value="1" class="table-item-qty w-full px-3 py-1.5 bg-slate-50 border border-slate-300 rounded text-sm focus:outline-none focus:ring-1 focus:ring-blazerNavy focus:bg-white font-mono">
+                </td>
+                <td class="p-2.5 text-center">
+                    <button onclick="this.closest('tr').remove()" class="text-slate-400 hover:text-red-600 p-1 rounded transition-colors" title="Remove Row">
+                        <svg class="w-4 h-4 mx-auto" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
+                    </button>
+                </td>
+            `;
+            tbody.appendChild(tr);
+        }
+
+        // Load CSV Data via PapaParse
+        function loadDatasets() {
+            const statusDot = document.getElementById('status-dot');
+            const statusText = document.getElementById('status-text');
+
+            let loadedProducts = false;
+            let loadedRank = false;
+
+            function checkReady() {
+                if (loadedProducts && loadedRank) {
+                    mergeDatasets();
+                    statusDot.className = "w-2 h-2 rounded-full bg-emerald-500";
+                    statusText.textContent = `Catalog Ready (${combinedCatalog.length.toLocaleString()} items indexed)`;
+                }
+            }
+
+            // Load Blazer.Products.csv
+            Papa.parse('./Blazer.Products.csv', {
+                download: true,
+                header: true,
+                skipEmptyLines: true,
+                complete: function(results) {
+                    productsData = results.data;
+                    loadedProducts = true;
+                    checkReady();
+                },
+                error: function(err) {
+                    console.warn("Could not load Blazer.Products.csv directly, attempting fallback mock catalog generation.", err);
+                    generateMockCatalog();
+                    loadedProducts = true;
+                    loadedRank = true;
+                    checkReady();
+                }
+            });
+
+            // Load Blazer.Web.Rank.csv
+            Papa.parse('./Blazer.Web.Rank.csv', {
+                download: true,
+                header: true,
+                skipEmptyLines: true,
+                complete: function(results) {
+                    webRankData = results.data;
+                    loadedRank = true;
+                    checkReady();
+                },
+                error: function(err) {
+                    console.warn("Could not load Blazer.Web.Rank.csv directly, utilizing product data ranking.", err);
+                    loadedRank = true;
+                    checkReady();
+                }
+            });
+        }
+
+        // Fallback Mock Catalog if CSV files are missing in local preview environment
+        function generateMockCatalog() {
+            productsData = [
+                { PROD_ID: "MC102-50", clean_title: "10/2 Metal Clad (MC) Cable Solid Copper with Ground", brand_manufacturer: "Southwire", manufacturer_part_number: "65045641", category: "Wire, Cable & Cord", ORDERS: "450" },
+                { PROD_ID: "CADDY-CJ6", clean_title: "Caddy CJ6 Cable Fastener / Support Clip", brand_manufacturer: "Caddy", manufacturer_part_number: "CJ6", category: "Caddy", ORDERS: "320" },
+                { PROD_ID: "EMT-1IN", clean_title: "1 Inch Electrical Metallic Tubing (EMT) Connector Set Screw", brand_manufacturer: "Bridgeport Fittings", manufacturer_part_number: "241-RT", category: "Conduit, Strut & Raceways", ORDERS: "890" },
+                { PROD_ID: "QO-200AMP", clean_title: "QO 200 Amp Main Breaker Load Center Service Panel", brand_manufacturer: "Square D", manufacturer_part_number: "QO140M200P", category: "Power Distribution", ORDERS: "120" },
+                { PROD_ID: "WAGO-221", clean_title: "Lever-Nuts 3-Conductor Splicing Connector 12-24 AWG", brand_manufacturer: "Wago", manufacturer_part_number: "221-413", category: "Connectors & Crimps", ORDERS: "1540" },
+                { PROD_ID: "THHN-12-SOL", # "12 AWG THHN Solid Copper Building Wire Black 500ft Reel", brand_manufacturer: "Southwire", manufacturer_part_number: "THHN12SOL-500", category: "Wire, Cable & Cord", ORDERS: "670" },
+                { PROD_ID: "BOX-4SQ", clean_title: "4-11/16 Inch Square Junction Box 2-1/8 Deep Welded", brand_manufacturer: "RACO", manufacturer_part_number: "840", category: "Boxes & Enclosures", ORDERS: "510" },
+                { PROD_ID: "DUP-REC-15", clean_title: "15 Amp Commercial Grade Duplex Receptacle Outlet Brown/White", brand_manufacturer: "Pass & Seymour", manufacturer_part_number: "CR15", category: "Wiring Devices", ORDERS: "430" }
+            ];
+            webRankData = productsData.map(p => ({ PROD_ID: p.PROD_ID, ORDERS: p.ORDERS }));
+        }
+
+        // Join Datasets on PROD_ID and index popularity (`ORDERS`)
+        function mergeDatasets() {
+            const rankMap = {};
+            webRankData.forEach(row => {
+                const pid = row.PROD_ID || row.prod_id || row.Id;
+                const orders = parseFloat(row.ORDERS || row.orders || row.OrderCount || 0);
+                if (pid) rankMap[pid.trim()] = orders;
+            });
+
+            combinedCatalog = productsData.map(prod => {
+                const pid = (prod.PROD_ID || prod.prod_id || prod.id || '').trim();
+                const orders = rankMap[pid] || parseFloat(prod.ORDERS || prod.orders || 10);
+                return {
+                    PROD_ID: pid,
+                    clean_title: prod.clean_title || prod.TITLE || prod.Description || prod.name || 'Electrical Supply Item',
+                    brand_manufacturer: prod.brand_manufacturer || prod.brand || prod.MANUFACTURER || 'Blazer Preferred',
+                    manufacturer_part_number: prod.manufacturer_part_number || prod.MPN || prod.part_number || pid,
+                    category: prod.category || prod.CATEGORY || 'General Electrical',
+                    ORDERS: orders
+                };
+            }).filter(item => item.PROD_ID !== '');
+        }
+
+        // Load Sample Prompt for quick demo
+        function loadSamplePrompt() {
+            switchMode('text');
+            document.getElementById('order-context').value = "Commercial Office Tenant Finish Remodel";
+            document.getElementById('order-textarea').value = "50ft 10/2 MC cable\n12 Caddy CJ6 clips\n5 1in EMT connectors\n2 Wago 221-413 connectors\n1 200 amp breaker QO panel";
+            processOrderInput();
+        }
+
+        // Handle File Upload Parsing
+        function handleFileUpload(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+            document.getElementById('file-name-display').textContent = `Loaded file: ${file.name}`;
+            
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                const content = e.target.result;
+                if (file.name.endsWith('.csv') || file.name.endsWith('.txt')) {
+                    // Quick parse text/csv into textarea
+                    document.getElementById('order-textarea').value = content;
+                    switchMode('text');
+                    processOrderInput();
+                } else {
+                    // Simulated OCR / AI Image or Doc Parse
+                    document.getElementById('order-textarea').value = "10/2 MC Cable\nEMT connectors 1 inch\nDuplex receptacle 15A";
+                    switchMode('text');
+                    processOrderInput();
+                }
+            };
+            reader.readAsText(file);
+        }
+
+        // Natural Language & Row Extraction Parser
+        function parseInputToLineItems() {
+            let rawItems = [];
+            
+            // Check active mode container
+            const activeTab = document.querySelector('#tab-text').classList.contains('bg-white') ? 'text' :
+                              document.querySelector('#tab-table').classList.contains('bg-white') ? 'table' : 'upload';
+            
+            if (activeTab === 'text' || activeTab === 'upload') {
+                const text = document.getElementById('order-textarea').value.trim();
+                if (!text) return [];
+                const lines = text.split(/\r?\n/);
+                lines.forEach(line => {
+                    line = line.trim();
+                    if (!line) return;
+                    // Split by comma or look for leading quantities
+                    const subLines = line.split(',');
+                    subLines.forEach(sub => {
+                        sub = sub.trim();
+                        if (sub) rawItems.push(parseQuantityAndQuery(sub));
+                    });
+                });
+            } else if (activeTab === 'table') {
+                const rows = document.querySelectorAll('#table-rows-body tr');
+                rows.forEach(row => {
+                    const desc = row.querySelector('.table-item-desc').value.trim();
+                    const qty = parseInt(row.querySelector('.table-item-qty').value) || 1;
+                    if (desc) {
+                        rawItems.push({ query: desc, qty: qty });
+                    }
+                });
+            }
+            return rawItems;
+        }
+
+        function parseQuantityAndQuery(str) {
+            // Match leading numbers or quantities like "50ft", "12x", "5 ", etc.
+            const regex = /^(\d+)(?:\s*(?:ft|x|pieces|pcs|ft\.|rolls)?)?\s+(.*)$/i;
+            const match = str.match(regex);
+            if (match) {
+                return { qty: parseInt(match[1]) || 1, query: match[2].trim() };
+            }
+            // Check trailing quantity e.g., "MC Cable 50"
+            const trailingRegex = /^(.*?)\s+(\d+)$/;
+            const matchTrail = str.match(trailingRegex);
+            if (matchTrail) {
+                return { qty: parseInt(matchTrail[2]) || 1, query: matchTrail[1].trim() };
+            }
+            return { qty: 1, query: str };
+        }
+
+        // Fuzzy Search & Scoring Algorithm incorporating Web Rank ORDERS
+        function searchCatalog(query) {
+            if (!combinedCatalog || combinedCatalog.length === 0) return [];
+            
+            const terms = query.toLowerCase().split(/\s+/).filter(t => t.length > 0);
+            
+            const scored = combinedCatalog.map(item => {
+                let score = 0;
+                const title = item.clean_title.toLowerCase();
+                const brand = item.brand_manufacturer.toLowerCase();
+                const mpn = item.manufacturer_part_number.toLowerCase();
+                const cat = item.category.toLowerCase();
+                const pid = item.PROD_ID.toLowerCase();
+
+                terms.forEach(term => {
+                    if (pid === term) score += 100;
+                    if (mpn.includes(term)) score += 60;
+                    if (title.includes(term)) score += 25;
+                    if (brand.includes(term)) score += 15;
+                    if (cat.includes(term)) score += 10;
+                });
+
+                // Weight by order popularity (logarithmic or direct scalar boost)
+                const orderBoost = Math.log10((item.ORDERS || 10) + 1) * 3;
+                score += orderBoost;
+
+                return { item, score };
+            });
+
+            scored.sort((a, b) => b.score - a.score);
+            return scored.map(s => s.item);
+        }
+
+        // Process Order Input & Render Result Cards
+        function processOrderInput() {
+            const rawInputs = parseInputToLineItems();
+            if (rawInputs.length === 0) {
+                alert("Please enter or input at least one item to process.");
+                return;
+            }
+
+            currentMatches = rawInputs.map((entry, index) => {
+                const matches = searchCatalog(entry.query);
+                const bestMatch = matches.length > 0 ? matches[0] : {
+                    PROD_ID: `CUSTOM-${index + 1}`,
+                    clean_title: entry.query,
+                    brand_manufacturer: "Custom / Special Order",
+                    manufacturer_part_number: "REQ-SPECIAL",
+                    category: "Special Order"
+                };
+                const alternatives = matches.slice(1, 5); // Up to 4 alternatives
+
+                return {
+                    index: index,
+                    queryText: entry.query,
+                    requestedQty: entry.qty,
+                    selectedProdId: bestMatch.PROD_ID,
+                    matchedProduct: bestMatch,
+                    alternatives: alternatives
+                };
+            });
+
+            renderResultCards();
+            
+            // Show results section and smooth scroll
+            const resultsSection = document.getElementById('results-section');
+            resultsSection.classList.remove('hidden');
+            resultsSection.scrollIntoView({ behavior: 'smooth' });
+        }
+
+        // Render Cards UI
+        function renderResultCards() {
+            const container = document.getElementById('product-cards-container');
+            container.innerHTML = '';
+            
+            document.getElementById('match-count-badge').textContent = `${currentMatches.length} Items`;
+            const contextVal = document.getElementById('job-context').value.trim();
+            if (contextVal) {
+                document.getElementById('context-display-text').textContent = `Project Context: "${contextVal}" — Verified items below ready for BuyBlazer cart.`;
+            }
+
+            currentMatches.forEach((matchObj, idx) => {
+                const p = matchObj.matchedProduct;
+                const card = document.createElement('div');
+                card.className = "bg-white rounded-xl shadow-sm border border-slate-200 p-5 transition-all hover:shadow-md";
+                
+                let altOptionsHTML = '';
+                if (matchObj.alternatives.length > 0) {
+                    altOptionsHTML = `
+                        <div class="mt-3 pt-3 border-t border-slate-100 flex items-center justify-between text-xs">
+                            <span class="text-slate-500 font-medium">Alternative Options:</span>
+                            <select onchange="swapAlternative(${idx}, this.value)" class="bg-slate-50 border border-slate-300 rounded px-2.5 py-1 text-slate-700 font-medium focus:outline-none focus:ring-1 focus:ring-blazerNavy">
+                                <option value="">-- Choose Close Alternative (${matchObj.alternatives.length}) --</option>
+                                ${matchObj.alternatives.map(alt => `<option value="${alt.PROD_ID}" ${alt.PROD_ID === matchObj.selectedProdId ? 'selected' : ''}>${alt.PROD_ID} - ${alt.clean_title.substring(0, 50)} (${alt.brand_manufacturer})</option>`).join('')}
+                            </select>
+                        </div>
+                    `;
+                }
+
+                card.innerHTML = `
+                    <div class="flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+                        <div class="space-y-1.5 flex-grow">
+                            <div class="flex flex-wrap items-center gap-2">
+                                <span class="bg-blazerNavy text-white px-2.5 py-1 rounded text-xs font-bold font-mono tracking-wide">${p.PROD_ID}</span>
+                                <span class="bg-slate-100 text-slate-700 px-2 py-0.5 rounded text-xs font-semibold border border-slate-200">${p.brand_manufacturer}</span>
+                                <span class="bg-blue-50 text-blue-700 px-2 py-0.5 rounded text-xs font-medium">${p.category}</span>
+                                <span class="text-xs text-slate-400 font-mono">MPN: ${p.manufacturer_part_number}</span>
+                            </div>
+                            <h3 class="text-base font-bold text-slate-800">${p.clean_title}</h3>
+                            <p class="text-xs text-slate-500">Original search query: <span class="italic text-slate-600">"${matchObj.queryText}"</span></p>
+                        </div>
+
+                        <div class="flex items-center gap-3 self-end md:self-center w-full md:w-auto justify-between md:justify-end">
+                            <div class="flex flex-col items-start">
+                                <label class="text-[10px] uppercase font-bold text-slate-400 mb-0.5">Quantity</label>
+                                <input type="number" min="1" value="${matchObj.requestedQty}" onchange="updateItemQty(${idx}, this.value)" class="w-24 px-3 py-1.5 bg-slate-50 border border-slate-300 rounded-lg text-sm font-bold text-center focus:outline-none focus:ring-2 focus:ring-blazerNavy">
+                            </div>
+                            <button onclick="removeMatchItem(${idx})" class="text-slate-400 hover:text-red-600 p-2 rounded-lg transition-colors mt-4" title="Remove Item">
+                                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
+                            </button>
+                        </div>
+                    </div>
+                    ${altOptionsHTML}
+                `;
+                container.appendChild(card);
+            });
+        }
+
+        // Update Quantity
+        function updateItemQty(idx, val) {
+            const qty = parseInt(val);
+            if (qty > 0) {
+                currentMatches[idx].requestedQty = qty;
+            }
+        }
+
+        // Remove Single Item
+        function removeMatchItem(idx) {
+            currentMatches.splice(idx, 1);
+            // Re-index
+            currentMatches.forEach((m, i) => m.index = i);
+            renderResultCards();
+            if (currentMatches.length === 0) {
+                document.getElementById('results-section').classList.add('hidden');
+            }
+        }
+
+        // Swap Alternative Product
+        function swapAlternative(idx, prodId) {
+            if (!prodId) return;
+            const found = combinedCatalog.find(item => item.PROD_ID === prodId);
+            if (found) {
+                currentMatches[idx].matchedProduct = found;
+                currentMatches[idx].selectedProdId = found.PROD_ID;
+                renderResultCards();
+            }
+        }
+
+        // Generate Formatted String for Cart Hand-off
+        function generateFormattedPayloadString() {
+            return currentMatches.map(m => `${m.selectedProdId},${m.requestedQty}`).join('\n');
+        }
+
+        // Action 1: Add All to BuyBlazer Cart via postMessage
+        function addAllToBuyBlazerCart() {
+            if (currentMatches.length === 0) {
+                alert("No items in order list.");
+                return;
+            }
+            const formattedString = generateFormattedPayloadString();
+            
+            // Dispatch postMessage to parent buyblazer.com frame
+            const targetOrigin = "https://www.buyblazer.com";
+            window.parent.postMessage({ 
+                type: "BLAZER_AI_ADD_TO_CART", 
+                payload: formattedString,
+                context: document.getElementById('job-context').value.trim()
+            }, targetOrigin);
+
+            // Visual feedback confirmation
+            const btn = event.target.closest('button');
+            const originalHTML = btn.innerHTML;
+            btn.innerHTML = `
+                <svg class="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+                Successfully Sent to Cart!
+            `;
+            btn.className = btn.className.replace('bg-blazerAccent hover:bg-amber-600', 'bg-emerald-600');
+            
+            setTimeout(() => {
+                btn.innerHTML = originalHTML;
+                btn.className = btn.className.replace('bg-emerald-600', 'bg-blazerAccent hover:bg-amber-600');
+            }, 3000);
+
+            console.log("Dispatched BLAZER_AI_ADD_TO_CART payload:\n", formattedString);
+        }
+
+        // Action 2: Copy Raw String to Clipboard (Fallback)
+        function copyRawStringToClipboard() {
+            if (currentMatches.length === 0) {
+                alert("No items to copy.");
+                return;
+            }
+            const formattedString = generateFormattedPayloadString();
+            navigator.clipboard.writeText(formattedString).then(() => {
+                alert("Raw order string copied to clipboard!\nFormat: PROD_ID,QTY\n\n" + formattedString);
+            }).catch(err => {
+                console.error("Failed to copy text: ", err);
+                prompt("Copy raw order string below:", formattedString);
+            });
+        }
+    </script>
+</body>
+</html>
