@@ -4,7 +4,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { GoogleGenAI } from '@google/genai';
 
-dotenv.config();
+dotenv.config({ override: true });
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -14,9 +14,17 @@ const port = parseInt(process.env.PORT || '3000', 10);
 
 app.use(express.json({ limit: '25mb' }));
 
+function isValidGeminiKey(key: string | undefined): boolean {
+  if (!key) return false;
+  const trimmed = key.trim();
+  if (trimmed === 'MY_GEMINI_API_KEY' || trimmed.startsWith('MY_')) return false;
+  return (trimmed.startsWith('AIzaSy') || trimmed.startsWith('AQ.')) && trimmed.length >= 30;
+}
+
 // Health check endpoint
 app.get('/api/health', (_req: Request, res: Response) => {
-  res.json({ status: 'ok', hasGeminiKey: Boolean(process.env.GEMINI_API_KEY) });
+  const hasValidKey = isValidGeminiKey(process.env.GEMINI_API_KEY);
+  res.json({ status: 'ok', hasGeminiKey: hasValidKey });
 });
 
 // AI Order Text Parsing endpoint
@@ -28,10 +36,10 @@ app.post('/api/parse-order', async (req: Request, res: Response) => {
 
   const apiKey = process.env.GEMINI_API_KEY;
 
-  if (!apiKey) {
+  if (!isValidGeminiKey(apiKey)) {
     return res.json({
       success: false,
-      message: 'GEMINI_API_KEY not configured, using built-in deterministic parser.',
+      message: 'GEMINI_API_KEY not configured or invalid format, using built-in deterministic parser.',
       items: null,
     });
   }
@@ -61,7 +69,7 @@ Return ONLY a valid JSON object matching this schema:
 }`;
 
     const response = await ai.models.generateContent({
-      model: 'gemini-3.8-flash',
+      model: 'gemini-3.1-flash-lite',
       contents: [
         {
           role: 'user',
@@ -85,10 +93,10 @@ Return ONLY a valid JSON object matching this schema:
       usedAi: true,
     });
   } catch (error: any) {
-    console.error('Gemini parsing error:', error?.message || error);
+    console.warn('Gemini request fallback (using local catalog matcher):', error?.message || 'Unknown error');
     return res.json({
       success: false,
-      error: error?.message || 'Gemini error',
+      error: 'Using local catalog matcher',
       items: null,
     });
   }
@@ -102,10 +110,10 @@ app.post('/api/parse-photo', async (req: Request, res: Response) => {
   }
 
   const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) {
+  if (!isValidGeminiKey(apiKey)) {
     return res.json({
       success: false,
-      message: 'GEMINI_API_KEY not configured.',
+      error: 'Photo AI recognition requires an active Google AI Studio Gemini API key (AIzaSy...). Please enter your materials using the Text / Voice or Table tabs.',
       items: null,
     });
   }
@@ -146,7 +154,7 @@ Return ONLY valid JSON matching this schema:
     const cleanBase64 = imageBase64.replace(/^data:image\/[a-z]+;base64,/, '');
 
     const response = await ai.models.generateContent({
-      model: 'gemini-3.8-flash',
+      model: 'gemini-3.1-flash-lite',
       contents: [
         {
           role: 'user',
@@ -176,7 +184,7 @@ Return ONLY valid JSON matching this schema:
       usedAi: true,
     });
   } catch (error: any) {
-    console.error('Photo OCR error:', error?.message || error);
+    console.warn('Photo OCR error:', error?.message || error);
     return res.json({
       success: false,
       error: error?.message || 'Error processing image',
