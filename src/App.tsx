@@ -1,18 +1,21 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { Header } from './components/Header';
 import { OrderForm } from './components/OrderForm';
 import { MatchedResults } from './components/MatchedResults';
+import { CatalogSearchModal } from './components/CatalogSearchModal';
 import { Footer } from './components/Footer';
 import { ProductItem, MatchedResultItem, OrderInputRow } from './types';
 import {
   fetchCsvCatalog,
   parseInputLine,
   matchQueryAgainstCatalog,
+  InvertedIndex,
 } from './utils/matching';
 
 export const App: React.FC = () => {
   const [catalog, setCatalog] = useState<ProductItem[]>([]);
   const [rankMap, setRankMap] = useState<Record<string, number>>({});
+  const [catalogIndex, setCatalogIndex] = useState<InvertedIndex | null>(null);
   const [isLoadingCatalog, setIsLoadingCatalog] = useState(true);
   const [catalogError, setCatalogError] = useState<string | null>(null);
   const [hasGeminiKey, setHasGeminiKey] = useState(false);
@@ -20,24 +23,32 @@ export const App: React.FC = () => {
   // Form State
   const [jobContext, setJobContext] = useState('');
   const [orderText, setOrderText] = useState('');
-  const [mode, setMode] = useState<'text' | 'table' | 'file'>('text');
+  const [mode, setMode] = useState<'text' | 'table' | 'file' | 'photo'>('text');
   const [uploadedFileName, setUploadedFileName] = useState<string | null>(null);
   const [tableRows, setTableRows] = useState<OrderInputRow[]>([
     { id: 'row-1', description: '3/4 EMT connector', qty: 10 },
   ]);
 
+  // Multimodal Photo State
+  const [photoDataUrl, setPhotoDataUrl] = useState<string | null>(null);
+  const [detectedPhotoNotes, setDetectedPhotoNotes] = useState<string | null>(null);
+
   // Results State
   const [matchedItems, setMatchedItems] = useState<MatchedResultItem[]>([]);
   const [isProcessing, setIsProcessing] = useState(false);
+
+  // Catalog Drawer Modal State
+  const [isSearchModalOpen, setIsSearchModalOpen] = useState(false);
 
   // Load Catalog & Check Health on Mount
   useEffect(() => {
     async function initCatalog() {
       try {
         setIsLoadingCatalog(true);
-        const { catalog: loadedCatalog, rankMap: loadedRanks } = await fetchCsvCatalog();
+        const { catalog: loadedCatalog, rankMap: loadedRanks, index } = await fetchCsvCatalog();
         setCatalog(loadedCatalog);
         setRankMap(loadedRanks);
+        setCatalogIndex(index);
         setCatalogError(null);
       } catch (err: any) {
         console.error('Failed to load catalog data:', err);
@@ -55,13 +66,17 @@ export const App: React.FC = () => {
           setHasGeminiKey(Boolean(data.hasGeminiKey));
         }
       } catch (e) {
-        // Dev server or local without backend
+        // Dev server or fallback
       }
     }
 
     initCatalog();
     checkHealth();
   }, []);
+
+  const categories = useMemo(() => {
+    return catalogIndex?.categorySet || [];
+  }, [catalogIndex]);
 
   const handleLoadDemo = () => {
     setMode('text');
@@ -73,9 +88,9 @@ export const App: React.FC = () => {
     setOrderText('');
     setJobContext('');
     setUploadedFileName(null);
-    setTableRows([
-      { id: 'row-1', description: '', qty: 1 },
-    ]);
+    setPhotoDataUrl(null);
+    setDetectedPhotoNotes(null);
+    setTableRows([{ id: 'row-1', description: '', qty: 1 }]);
     setMatchedItems([]);
   };
 
@@ -103,7 +118,7 @@ export const App: React.FC = () => {
 
       setIsProcessing(true);
 
-      // Attempt AI smart parsing if Gemini is available
+      // Attempt AI smart parsing if Gemini is active
       if (hasGeminiKey) {
         try {
           const res = await fetch('/api/parse-order', {
@@ -123,7 +138,7 @@ export const App: React.FC = () => {
             }
           }
         } catch (e) {
-          console.warn('AI Parsing failed, falling back to local heuristic matcher', e);
+          console.warn('AI Parsing error, falling back to local heuristic matcher', e);
         }
       }
 
@@ -149,9 +164,9 @@ export const App: React.FC = () => {
     setIsProcessing(true);
 
     try {
-      // Run the catalog matching across 8,479 SKUs
+      // Rapid matching via inverted index
       const results: MatchedResultItem[] = parsedInputs.map((input) =>
-        matchQueryAgainstCatalog(input.query, input.qty, input.unit, catalog, rankMap)
+        matchQueryAgainstCatalog(input.query, input.qty, input.unit, catalog, rankMap, catalogIndex)
       );
 
       setMatchedItems(results);
@@ -160,6 +175,80 @@ export const App: React.FC = () => {
     } finally {
       setIsProcessing(false);
     }
+  };
+
+  const handleProcessPhoto = async (base64: string, mimeType: string) => {
+    if (catalog.length === 0) {
+      alert('Catalog is still loading. Please wait a moment.');
+      return;
+    }
+
+    setIsProcessing(true);
+
+    try {
+      const res = await fetch('/api/parse-photo', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ imageBase64: base64, mimeType, jobContext }),
+      });
+
+      const data = await res.json();
+
+      if (data.success && Array.isArray(data.items) && data.items.length > 0) {
+        setDetectedPhotoNotes(data.transcribedNotes || 'Extracted items from jobsite photo');
+
+        const parsedInputs = data.items.map((it: any) => ({
+          query: it.query || it.originalText,
+          qty: parseInt(it.qty, 10) || 1,
+          unit: it.unit || '',
+        }));
+
+        const results: MatchedResultItem[] = parsedInputs.map((input: any) =>
+          matchQueryAgainstCatalog(
+            input.query,
+            input.qty,
+            input.unit,
+            catalog,
+            rankMap,
+            catalogIndex
+          )
+        );
+
+        setMatchedItems(results);
+      } else {
+        alert(
+          data.error ||
+            'Could not extract text from image. Make sure the handwriting is clear and well-lit.'
+        );
+      }
+    } catch (err) {
+      console.error('Error processing photo:', err);
+      alert('Failed to connect to the photo recognition server.');
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const handleAddProductFromCatalog = (product: ProductItem, qty: number) => {
+    // Generate 4 alternatives from the same category or brand
+    const sameCat = catalog
+      .filter((p) => p.PROD_ID !== product.PROD_ID && p.primary_category === product.primary_category)
+      .slice(0, 4);
+
+    const newItem: MatchedResultItem = {
+      id: `${product.PROD_ID}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      originalQuery: `Manual add: ${product.clean_title || product.PRODUCT}`,
+      requestedQty: qty,
+      qty,
+      product,
+      alternatives: sameCat,
+      score: 100,
+      confidenceLevel: 'high',
+      confidenceLabel: 'Exact / High Match',
+      matchReasons: ['Directly selected from catalog search', 'Exact SKU match'],
+    };
+
+    setMatchedItems((prev) => [newItem, ...prev]);
   };
 
   const handleUpdateQty = (id: string, newQty: number) => {
@@ -172,7 +261,6 @@ export const App: React.FC = () => {
     setMatchedItems((prev) =>
       prev.map((item) => {
         if (item.id !== id) return item;
-        // Keep existing alternatives, excluding the newly active one and including the old one
         const updatedAlts = [
           item.product,
           ...item.alternatives.filter((a) => a.PROD_ID !== newProduct.PROD_ID),
@@ -182,6 +270,9 @@ export const App: React.FC = () => {
           ...item,
           product: newProduct,
           alternatives: updatedAlts,
+          confidenceLevel: 'high',
+          confidenceLabel: 'Manually Swapped',
+          matchReasons: ['Contractor swapped with close alternative'],
         };
       })
     );
@@ -219,6 +310,10 @@ export const App: React.FC = () => {
               isProcessing={isProcessing}
               uploadedFileName={uploadedFileName}
               setUploadedFileName={setUploadedFileName}
+              photoDataUrl={photoDataUrl}
+              setPhotoDataUrl={setPhotoDataUrl}
+              onProcessPhoto={handleProcessPhoto}
+              detectedPhotoNotes={detectedPhotoNotes}
             />
           </div>
 
@@ -230,12 +325,22 @@ export const App: React.FC = () => {
               onSwapProduct={handleSwapProduct}
               onRemoveItem={handleRemoveItem}
               catalog={catalog}
+              onOpenCatalogSearch={() => setIsSearchModalOpen(true)}
             />
           </div>
         </main>
       </div>
 
       <Footer />
+
+      {/* Live Catalog Search & Manual "Add Item" Modal */}
+      <CatalogSearchModal
+        isOpen={isSearchModalOpen}
+        onClose={() => setIsSearchModalOpen(false)}
+        catalog={catalog}
+        categories={categories}
+        onAddProduct={handleAddProductFromCatalog}
+      />
     </div>
   );
 };

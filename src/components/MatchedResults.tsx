@@ -1,5 +1,17 @@
 import React, { useState } from 'react';
-import { Copy, ShoppingCart, Trash2, ArrowRightLeft, Check, Sparkles, AlertCircle } from 'lucide-react';
+import {
+  Copy,
+  ShoppingCart,
+  Trash2,
+  ArrowRightLeft,
+  Check,
+  Plus,
+  ShieldCheck,
+  AlertTriangle,
+  Info,
+  ChevronDown,
+  ChevronUp,
+} from 'lucide-react';
 import { MatchedResultItem, ProductItem } from '../types';
 
 interface MatchedResultsProps {
@@ -8,6 +20,7 @@ interface MatchedResultsProps {
   onSwapProduct: (id: string, newProduct: ProductItem) => void;
   onRemoveItem: (id: string) => void;
   catalog: ProductItem[];
+  onOpenCatalogSearch: () => void;
 }
 
 export const MatchedResults: React.FC<MatchedResultsProps> = ({
@@ -16,8 +29,10 @@ export const MatchedResults: React.FC<MatchedResultsProps> = ({
   onSwapProduct,
   onRemoveItem,
   catalog,
+  onOpenCatalogSearch,
 }) => {
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [expandedReasons, setExpandedReasons] = useState<Record<string, boolean>>({});
 
   const showToast = (msg: string) => {
     setToastMessage(msg);
@@ -82,6 +97,13 @@ export const MatchedResults: React.FC<MatchedResultsProps> = ({
     }
   };
 
+  const toggleReasons = (id: string) => {
+    setExpandedReasons((prev) => ({
+      ...prev,
+      [id]: !prev[id],
+    }));
+  };
+
   const totalQty = items.reduce((acc, curr) => acc + (curr.qty || 0), 0);
 
   return (
@@ -114,7 +136,16 @@ export const MatchedResults: React.FC<MatchedResultsProps> = ({
             </span>
           )}
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={onOpenCatalogSearch}
+            className="text-xs bg-blue-50 hover:bg-blue-100 text-[#002d72] border border-blue-200 font-bold py-1.5 px-3 rounded-lg flex items-center gap-1.5 transition cursor-pointer"
+            title="Browse all 8,400+ catalog items"
+          >
+            <Plus className="w-3.5 h-3.5" />
+            + Add From Catalog
+          </button>
           <button
             type="button"
             onClick={handleCopyRawList}
@@ -140,45 +171,117 @@ export const MatchedResults: React.FC<MatchedResultsProps> = ({
           <div className="bg-white p-12 rounded-xl border border-dashed border-gray-300 text-center text-gray-400 text-sm">
             <p className="font-semibold text-gray-500">No items processed yet.</p>
             <p className="text-xs text-gray-400 mt-1">
-              Enter your contractor material list on the left and click &quot;AI Match &amp; Process Order&quot;.
+              Enter your contractor material list or snap a jobsite photo on the left, or click &quot;+ Add From Catalog&quot;.
             </p>
           </div>
         ) : (
-          items.map((item, index) => {
+          items.map((item) => {
             const prod = item.product;
             const alternatives = item.alternatives || [];
+            const isHigh = item.confidenceLevel === 'high';
+            const isMedium = item.confidenceLevel === 'medium';
+            const isLow = item.confidenceLevel === 'low';
+            const areReasonsExpanded = Boolean(expandedReasons[item.id]);
 
             return (
               <div
                 key={item.id}
-                className="bg-white p-4 rounded-xl border border-gray-200 shadow-xs flex flex-col gap-3 transition hover:border-gray-300"
+                className={`bg-white p-4 rounded-xl border shadow-xs flex flex-col gap-3 transition ${
+                  isHigh
+                    ? 'border-emerald-200/80 hover:border-emerald-300'
+                    : isMedium
+                    ? 'border-amber-200/80 hover:border-amber-300'
+                    : 'border-orange-300 bg-orange-50/20 hover:border-orange-400'
+                }`}
               >
                 <div className="flex items-start justify-between gap-3">
-                  <div className="space-y-1 flex-1">
+                  <div className="space-y-1.5 flex-1">
+                    {/* Header Badges */}
                     <div className="flex flex-wrap items-center gap-2">
                       <span className="inline-block bg-[#002d72] text-white text-xs font-bold px-2 py-0.5 rounded">
                         PROD ID: {prod.PROD_ID}
                       </span>
+
+                      {/* Confidence Indicator Pill */}
+                      {isHigh ? (
+                        <span className="inline-flex items-center gap-1 bg-emerald-100 text-emerald-800 text-[11px] font-bold px-2 py-0.5 rounded-full border border-emerald-300">
+                          <ShieldCheck className="w-3 h-3 text-emerald-600" />
+                          High Confidence
+                        </span>
+                      ) : isMedium ? (
+                        <span className="inline-flex items-center gap-1 bg-amber-100 text-amber-800 text-[11px] font-bold px-2 py-0.5 rounded-full border border-amber-300">
+                          <Info className="w-3 h-3 text-amber-600" />
+                          Likely Match
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1 bg-orange-100 text-orange-900 text-[11px] font-bold px-2 py-0.5 rounded-full border border-orange-300 animate-pulse">
+                          <AlertTriangle className="w-3 h-3 text-orange-600" />
+                          Review Needed
+                        </span>
+                      )}
+
                       {prod.brand_manufacturer && (
-                        <span className="inline-block bg-gray-100 text-gray-600 text-[11px] font-semibold px-2 py-0.5 rounded">
+                        <span className="inline-block bg-gray-100 text-gray-700 text-[11px] font-semibold px-2 py-0.5 rounded">
                           {prod.brand_manufacturer}
                         </span>
                       )}
+
                       {item.originalQuery && (
-                        <span className="text-[11px] text-gray-400 italic">
-                          Matched from: &quot;{item.originalQuery}&quot;
+                        <span className="text-[11px] text-gray-500 italic">
+                          From: &quot;{item.originalQuery}&quot;
                         </span>
                       )}
                     </div>
+
                     <h3 className="text-sm font-bold text-gray-900 leading-snug">
                       {prod.clean_title || prod.PRODUCT}
                     </h3>
-                    <p className="text-xs text-gray-500 line-clamp-2">
-                      <span className="font-medium text-gray-600">ERP Name:</span>{' '}
-                      {(prod.PRODUCT || '').substring(0, 90)}... |{' '}
-                      <span className="font-medium text-gray-600">MPN:</span>{' '}
-                      {prod.manufacturer_part_number || 'N/A'}
+
+                    <p className="text-xs text-gray-500">
+                      <span className="font-semibold text-gray-600">ERP Description:</span>{' '}
+                      {(prod.PRODUCT || '').substring(0, 85)}... |{' '}
+                      <span className="font-semibold text-gray-600">MPN:</span>{' '}
+                      <span className="font-mono text-blue-800 font-bold">
+                        {prod.manufacturer_part_number || 'N/A'}
+                      </span>
                     </p>
+
+                    {/* Match Verification & Reasons */}
+                    {item.matchReasons && item.matchReasons.length > 0 && (
+                      <div className="pt-1">
+                        <button
+                          type="button"
+                          onClick={() => toggleReasons(item.id)}
+                          className="text-[11px] text-gray-500 hover:text-gray-800 flex items-center gap-1 font-medium cursor-pointer"
+                        >
+                          {areReasonsExpanded ? (
+                            <>
+                              <ChevronUp className="w-3 h-3" /> Hide match details
+                            </>
+                          ) : (
+                            <>
+                              <ChevronDown className="w-3 h-3" /> Why did this match? ({item.matchReasons.length})
+                            </>
+                          )}
+                        </button>
+
+                        {areReasonsExpanded && (
+                          <div className="mt-1.5 p-2 bg-gray-50 rounded-lg border border-gray-200 text-[11px] space-y-1">
+                            {item.matchReasons.map((reason, idx) => (
+                              <div key={idx} className="flex items-center gap-1.5 text-gray-600">
+                                <span className="w-1.5 h-1.5 rounded-full bg-blue-600"></span>
+                                {reason}
+                              </div>
+                            ))}
+                            {isLow && (
+                              <p className="text-orange-800 font-semibold pt-1 border-t border-orange-100">
+                                Tip: Confirm conduit diameter, fitting threading, or material gauge. Click below to swap alternatives.
+                              </p>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </div>
 
                   {/* Quantity and Remove */}

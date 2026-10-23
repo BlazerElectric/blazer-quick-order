@@ -19,6 +19,9 @@ export interface MatchedResultItem {
   product: ProductItem;
   alternatives: ProductItem[];
   score: number;
+  confidenceLevel: 'high' | 'medium' | 'low';
+  confidenceLabel: string;
+  matchReasons: string[];
 }
 
 export interface OrderInputRow {

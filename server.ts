@@ -12,14 +12,14 @@ const __dirname = path.dirname(__filename);
 const app = express();
 const port = parseInt(process.env.PORT || '3000', 10);
 
-app.use(express.json({ limit: '10mb' }));
+app.use(express.json({ limit: '25mb' }));
 
 // Health check endpoint
 app.get('/api/health', (_req: Request, res: Response) => {
   res.json({ status: 'ok', hasGeminiKey: Boolean(process.env.GEMINI_API_KEY) });
 });
 
-// AI Order Parsing endpoint
+// AI Order Text Parsing endpoint
 app.post('/api/parse-order', async (req: Request, res: Response) => {
   const { text, jobContext } = req.body;
   if (!text || typeof text !== 'string') {
@@ -29,7 +29,6 @@ app.post('/api/parse-order', async (req: Request, res: Response) => {
   const apiKey = process.env.GEMINI_API_KEY;
 
   if (!apiKey) {
-    // If no API key is provided, indicate client fallback
     return res.json({
       success: false,
       message: 'GEMINI_API_KEY not configured, using built-in deterministic parser.',
@@ -90,6 +89,97 @@ Return ONLY a valid JSON object matching this schema:
     return res.json({
       success: false,
       error: error?.message || 'Gemini error',
+      items: null,
+    });
+  }
+});
+
+// Multimodal Photo / Drywall Scribble OCR Parsing endpoint
+app.post('/api/parse-photo', async (req: Request, res: Response) => {
+  const { imageBase64, mimeType, jobContext } = req.body;
+  if (!imageBase64 || !mimeType) {
+    return res.status(400).json({ error: 'Image data and mimeType are required' });
+  }
+
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) {
+    return res.json({
+      success: false,
+      message: 'GEMINI_API_KEY not configured.',
+      items: null,
+    });
+  }
+
+  try {
+    const ai = new GoogleGenAI();
+    const systemPrompt = `You are an expert electrical contractor OCR assistant for Blazer Electric Supply Company.
+Examine this photo carefully. It may be:
+- A handwritten material note on a scrap of drywall, 2x4 lumber, or cardboard
+- A handwritten yellow legal pad or notebook list
+- A printed blueprint note, material requisition sheet, or invoice snippet
+
+Extract each distinct electrical item that the contractor needs.
+Transcribe trade slang (e.g. "12/2 romex", "1/2 emt straps", "1900 box with 1/2 mud ring", "caddy clips", "3-way switches", "ground rods", "wire nuts").
+Job context if provided: "${jobContext || 'General electrical job'}".
+
+For each item, output:
+- query: clean search term for Blazer Electric's catalog
+- qty: number
+- unit: unit of measure if written (e.g., "ft", "boxes", "rolls", "pcs", "ea")
+- originalText: exact handwritten or printed text detected on the image
+
+Also provide a brief summary of the detected note in 'transcribedNotes'.
+
+Return ONLY valid JSON matching this schema:
+{
+  "transcribedNotes": "string",
+  "items": [
+    {
+      "query": "string",
+      "qty": number,
+      "unit": "string",
+      "originalText": "string"
+    }
+  ]
+}`;
+
+    const cleanBase64 = imageBase64.replace(/^data:image\/[a-z]+;base64,/, '');
+
+    const response = await ai.models.generateContent({
+      model: 'gemini-3.8-flash',
+      contents: [
+        {
+          role: 'user',
+          parts: [
+            { text: systemPrompt },
+            {
+              inlineData: {
+                data: cleanBase64,
+                mimeType: mimeType || 'image/jpeg',
+              },
+            },
+          ],
+        },
+      ],
+      config: {
+        responseMimeType: 'application/json',
+      },
+    });
+
+    const responseText = response.text || '{}';
+    const parsedData = JSON.parse(responseText);
+
+    return res.json({
+      success: true,
+      items: parsedData.items || [],
+      transcribedNotes: parsedData.transcribedNotes || '',
+      usedAi: true,
+    });
+  } catch (error: any) {
+    console.error('Photo OCR error:', error?.message || error);
+    return res.json({
+      success: false,
+      error: error?.message || 'Error processing image',
       items: null,
     });
   }
