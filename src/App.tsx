@@ -64,7 +64,7 @@ export const App: React.FC = () => {
 
     async function checkHealth() {
       try {
-        const res = await fetch('/api/health');
+        const res = await fetch('/api/health', { credentials: 'include' });
         if (res.ok) {
           const data = await res.json();
           setHasGeminiKey(Boolean(data.hasGeminiKey));
@@ -139,6 +139,7 @@ export const App: React.FC = () => {
         try {
           const res = await fetch('/api/parse-order', {
             method: 'POST',
+            credentials: 'include',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ text: rawText, jobContext }),
           });
@@ -213,11 +214,29 @@ export const App: React.FC = () => {
     setBannerMessage(null);
 
     try {
-      const res = await fetch('/api/parse-photo', {
+      let res = await fetch('/api/parse-photo', {
         method: 'POST',
+        credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ imageBase64: base64, mimeType, jobContext }),
       });
+
+      // If initial attempt returns 404, retry with trailing slash endpoint
+      if (res.status === 404) {
+        try {
+          const retryRes = await fetch('/api/parse-photo/', {
+            method: 'POST',
+            credentials: 'include',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ imageBase64: base64, mimeType, jobContext }),
+          });
+          if (retryRes.ok) {
+            res = retryRes;
+          }
+        } catch {
+          // ignore retry error
+        }
+      }
 
       if (!res.ok) {
         let errorMsg = `Server error (${res.status})`;
@@ -229,6 +248,8 @@ export const App: React.FC = () => {
             errorMsg = 'Image file is too large. Please take or select a smaller photo.';
           } else if (res.status === 504 || res.status === 502) {
             errorMsg = 'Photo recognition server timed out. Please try again.';
+          } else if (res.status === 404) {
+            errorMsg = 'Backend recognition endpoint could not be reached. Please refresh the page or enter materials in Text mode.';
           }
         }
         setBannerMessage({ type: 'error', text: errorMsg });

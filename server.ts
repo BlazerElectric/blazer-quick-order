@@ -16,15 +16,29 @@ const port = parseInt(process.env.PORT || '3000', 10);
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
-// Enable CORS and handle OPTIONS preflight cleanly
-app.use((_req: Request, res: Response, next) => {
-  res.header('Access-Control-Allow-Origin', '*');
+// Enable CORS with credential support and handle OPTIONS preflight cleanly
+app.use((req: Request, res: Response, next) => {
+  const origin = req.headers.origin;
+  if (origin) {
+    res.header('Access-Control-Allow-Origin', origin);
+    res.header('Access-Control-Allow-Credentials', 'true');
+  } else {
+    res.header('Access-Control-Allow-Origin', '*');
+  }
   res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS, HEAD');
   res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
-  if (_req.method === 'OPTIONS') {
+  if (req.method === 'OPTIONS') {
     return res.sendStatus(200);
   }
   next();
+});
+
+// AI Studio Auth Flow Cookie Check handler
+app.get('/__cookie_check.html', (req: Request, res: Response) => {
+  const returnUrl = (req.query.return_url as string) || '/';
+  res.send(`<!DOCTYPE html><html><head><script>
+    window.location.replace(${JSON.stringify(returnUrl)});
+  </script></head><body>Redirecting...</body></html>`);
 });
 
 function isValidGeminiKey(key: string | undefined): boolean {
