@@ -1,4 +1,5 @@
-import express, { Request, Response } from 'express';
+import express from 'express';
+import type { Request, Response } from 'express';
 import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -15,6 +16,17 @@ const port = parseInt(process.env.PORT || '3000', 10);
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
+// Enable CORS and handle OPTIONS preflight cleanly
+app.use((_req: Request, res: Response, next) => {
+  res.header('Access-Control-Allow-Origin', '*');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS, HEAD');
+  res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
+  if (_req.method === 'OPTIONS') {
+    return res.sendStatus(200);
+  }
+  next();
+});
+
 function isValidGeminiKey(key: string | undefined): boolean {
   if (!key) return false;
   const trimmed = key.trim();
@@ -23,7 +35,7 @@ function isValidGeminiKey(key: string | undefined): boolean {
 }
 
 // Health check endpoint
-app.get('/api/health', (_req: Request, res: Response) => {
+app.get(['/api/health', '/api/health/'], (_req: Request, res: Response) => {
   const hasValidKey = isValidGeminiKey(process.env.GEMINI_API_KEY);
   res.json({ status: 'ok', hasGeminiKey: hasValidKey });
 });
@@ -45,8 +57,13 @@ function cleanJsonText(raw: string): any {
   }
 }
 
+// Diagnostic GET for parse-order
+app.get(['/api/parse-order', '/api/parse-order/'], (_req: Request, res: Response) => {
+  res.json({ status: 'ok', message: 'Send a POST request with order text.' });
+});
+
 // AI Order Text Parsing endpoint
-app.post('/api/parse-order', async (req: Request, res: Response) => {
+app.post(['/api/parse-order', '/api/parse-order/'], async (req: Request, res: Response) => {
   const { text, jobContext } = req.body;
   if (!text || typeof text !== 'string') {
     return res.status(400).json({ error: 'Text prompt is required' });
@@ -119,8 +136,13 @@ Return ONLY a valid JSON object matching this schema:
   }
 });
 
+// Diagnostic GET for parse-photo
+app.get(['/api/parse-photo', '/api/parse-photo/'], (_req: Request, res: Response) => {
+  res.json({ status: 'ok', message: 'Photo recognition endpoint is ready for POST requests.' });
+});
+
 // Multimodal Photo / Drywall Scribble OCR Parsing endpoint
-app.post('/api/parse-photo', async (req: Request, res: Response) => {
+app.post(['/api/parse-photo', '/api/parse-photo/'], async (req: Request, res: Response) => {
   const { imageBase64, mimeType, jobContext } = req.body;
   if (!imageBase64) {
     return res.status(400).json({ success: false, error: 'Image data is required' });
