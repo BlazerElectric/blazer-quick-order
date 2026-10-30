@@ -64,10 +64,12 @@ export const OrderForm: React.FC<OrderFormProps> = ({
 }) => {
   const [isListening, setIsListening] = useState(false);
   const [isCompressing, setIsCompressing] = useState(false);
+  const [isDragging, setIsDragging] = useState(false);
   const [photoPayload, setPhotoPayload] = useState<{ base64: string; mimeType: string } | null>(null);
 
   const recognitionRef = useRef<any>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const galleryInputRef = useRef<HTMLInputElement>(null);
   const cameraInputRef = useRef<HTMLInputElement>(null);
 
   const toggleSpeechRecognition = () => {
@@ -170,10 +172,7 @@ export const OrderForm: React.FC<OrderFormProps> = ({
     reader.readAsText(file);
   };
 
-  const handlePhotoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
+  const processSelectedImageFile = async (file: File) => {
     setIsCompressing(true);
     setBannerMessage(null);
 
@@ -189,8 +188,24 @@ export const OrderForm: React.FC<OrderFormProps> = ({
       });
     } finally {
       setIsCompressing(false);
-      // Reset input value so re-selecting same file triggers onChange
-      if (e.target) e.target.value = '';
+    }
+  };
+
+  const handlePhotoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      processSelectedImageFile(file);
+    }
+    // Reset so the same file can be re-selected if desired
+    if (e.target) e.target.value = '';
+  };
+
+  const handlePhotoDrop = (e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    setIsDragging(false);
+    const file = e.dataTransfer.files?.[0];
+    if (file && (file.type.startsWith('image/') || file.name.match(/\.(jpg|jpeg|png|webp|heic)$/i))) {
+      processSelectedImageFile(file);
     }
   };
 
@@ -213,7 +228,7 @@ export const OrderForm: React.FC<OrderFormProps> = ({
     if (!photoDataUrl || !photoPayload) {
       setBannerMessage({
         type: 'error',
-        text: 'Please snap a photo or upload an image first.',
+        text: 'Please select a photo from your gallery or take a picture first.',
       });
       return;
     }
@@ -480,39 +495,85 @@ export const OrderForm: React.FC<OrderFormProps> = ({
               </span>
             </div>
 
+            {/* Hidden native file pickers: one for gallery (no capture), one for hardware camera */}
+            <input
+              ref={galleryInputRef}
+              type="file"
+              accept="image/*,image/jpeg,image/png,image/webp,image/heic"
+              className="hidden"
+              onChange={handlePhotoUpload}
+            />
+            <input
+              ref={cameraInputRef}
+              type="file"
+              accept="image/*"
+              capture="environment"
+              className="hidden"
+              onChange={handlePhotoUpload}
+            />
+
             {!photoDataUrl ? (
-              <div className="space-y-2">
+              <div className="space-y-3">
                 <div
-                  onClick={() => cameraInputRef.current?.click()}
-                  className="border-2 border-dashed border-amber-300 bg-amber-50/40 rounded-xl p-6 text-center hover:bg-amber-50 transition cursor-pointer"
+                  onDragOver={(e) => {
+                    e.preventDefault();
+                    setIsDragging(true);
+                  }}
+                  onDragLeave={() => setIsDragging(false)}
+                  onDrop={handlePhotoDrop}
+                  className={`border-2 border-dashed rounded-xl p-5 text-center transition ${
+                    isDragging
+                      ? 'border-[#002d72] bg-blue-50/70'
+                      : 'border-amber-300 bg-amber-50/40 hover:bg-amber-50/70'
+                  }`}
                 >
-                  <input
-                    ref={cameraInputRef}
-                    type="file"
-                    accept="image/*"
-                    capture="environment"
-                    className="hidden"
-                    onChange={handlePhotoUpload}
-                  />
                   {isCompressing ? (
-                    <div className="py-2">
+                    <div className="py-4">
                       <span className="w-6 h-6 border-2 border-amber-600 border-t-transparent rounded-full animate-spin inline-block mb-2"></span>
                       <p className="text-xs text-amber-800 font-bold">Optimizing photo for fast AI analysis...</p>
                     </div>
                   ) : (
                     <>
-                      <Camera className="w-8 h-8 text-amber-600 mx-auto mb-2" />
-                      <p className="text-xs text-gray-700 font-bold">
-                        Snap photo or upload image
+                      <p className="text-xs text-gray-700 font-bold mb-3">
+                        Upload jobsite note, drywall scribble, or material ticket:
                       </p>
-                      <p className="text-[11px] text-gray-500 mt-1">
-                        Works with drywall pencil scribbles, handwritten legal pads, or printed tickets
+
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-w-md mx-auto">
+                        {/* Option 1: Gallery Picker */}
+                        <button
+                          type="button"
+                          onClick={() => galleryInputRef.current?.click()}
+                          className="bg-white hover:bg-gray-50 text-gray-800 border-2 border-amber-400/80 hover:border-amber-500 p-3 rounded-lg flex flex-col items-center justify-center gap-1.5 shadow-xs transition cursor-pointer text-center group"
+                        >
+                          <div className="w-8 h-8 rounded-full bg-amber-100 flex items-center justify-center group-hover:scale-110 transition">
+                            <ImageIcon className="w-4 h-4 text-amber-700" />
+                          </div>
+                          <span className="text-xs font-bold text-gray-900">Choose from Gallery</span>
+                          <span className="text-[10px] text-gray-500">Pick from photo library or files</span>
+                        </button>
+
+                        {/* Option 2: Live Camera */}
+                        <button
+                          type="button"
+                          onClick={() => cameraInputRef.current?.click()}
+                          className="bg-[#002d72] hover:bg-[#1e3a8a] text-white p-3 rounded-lg flex flex-col items-center justify-center gap-1.5 shadow-xs transition cursor-pointer text-center group"
+                        >
+                          <div className="w-8 h-8 rounded-full bg-white/20 flex items-center justify-center group-hover:scale-110 transition">
+                            <Camera className="w-4 h-4 text-white" />
+                          </div>
+                          <span className="text-xs font-bold text-white">Take Live Photo</span>
+                          <span className="text-[10px] text-blue-200">Snap directly with camera</span>
+                        </button>
+                      </div>
+
+                      <p className="text-[11px] text-gray-400 mt-3">
+                        Or drag and drop any image file here
                       </p>
                     </>
                   )}
                 </div>
 
-                <div className="flex items-center justify-between pt-1">
+                <div className="flex items-center justify-between pt-0.5">
                   <span className="text-[11px] text-gray-400">Testing without a photo?</span>
                   <button
                     type="button"
@@ -520,17 +581,17 @@ export const OrderForm: React.FC<OrderFormProps> = ({
                     className="text-xs text-[#002d72] hover:text-[#1e3a8a] font-bold hover:underline flex items-center gap-1 cursor-pointer bg-blue-50 px-2.5 py-1 rounded-md border border-blue-200"
                   >
                     <Sparkles className="w-3 h-3 text-amber-500" />
-                    Load Sample Jobsite Note
+                    Load Sample Drywall Note
                   </button>
                 </div>
               </div>
             ) : (
               <div className="space-y-2">
-                <div className="relative rounded-xl overflow-hidden border border-gray-200 bg-black/5 flex items-center justify-center max-h-48">
+                <div className="relative rounded-xl overflow-hidden border border-gray-200 bg-black/5 flex items-center justify-center max-h-52">
                   <img
                     src={photoDataUrl}
                     alt="Jobsite Note"
-                    className="object-contain max-h-48 w-auto rounded-lg"
+                    className="object-contain max-h-52 w-auto rounded-lg"
                   />
                   <button
                     type="button"
@@ -546,20 +607,30 @@ export const OrderForm: React.FC<OrderFormProps> = ({
                   </button>
                 </div>
 
-                <div className="flex items-center justify-between text-xs text-gray-500">
-                  <button
-                    type="button"
-                    onClick={() => cameraInputRef.current?.click()}
-                    className="text-[#002d72] font-semibold hover:underline flex items-center gap-1 cursor-pointer"
-                  >
-                    <ImageIcon className="w-3.5 h-3.5" /> Change Photo
-                  </button>
+                <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-gray-500 pt-1">
+                  <div className="flex items-center gap-3">
+                    <button
+                      type="button"
+                      onClick={() => galleryInputRef.current?.click()}
+                      className="text-[#002d72] font-semibold hover:underline flex items-center gap-1 cursor-pointer"
+                    >
+                      <ImageIcon className="w-3.5 h-3.5" /> Choose from Gallery
+                    </button>
+                    <span className="text-gray-300">|</span>
+                    <button
+                      type="button"
+                      onClick={() => cameraInputRef.current?.click()}
+                      className="text-gray-700 font-semibold hover:underline flex items-center gap-1 cursor-pointer"
+                    >
+                      <Camera className="w-3.5 h-3.5" /> Retake Photo
+                    </button>
+                  </div>
                   <button
                     type="button"
                     onClick={handleLoadSampleDrywall}
                     className="text-gray-500 hover:text-[#002d72] font-medium hover:underline flex items-center gap-1 cursor-pointer"
                   >
-                    Load Sample Note
+                    Load Sample
                   </button>
                 </div>
               </div>

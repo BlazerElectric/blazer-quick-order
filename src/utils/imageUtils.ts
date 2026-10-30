@@ -8,8 +8,8 @@
  */
 export async function compressAndNormalizeImage(
   file: File,
-  maxDimension = 1600,
-  quality = 0.85
+  maxDimension = 1280,
+  quality = 0.8
 ): Promise<{ base64: string; mimeType: string; dataUrl: string }> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();

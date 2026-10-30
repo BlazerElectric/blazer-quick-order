@@ -219,6 +219,22 @@ export const App: React.FC = () => {
         body: JSON.stringify({ imageBase64: base64, mimeType, jobContext }),
       });
 
+      if (!res.ok) {
+        let errorMsg = `Server error (${res.status})`;
+        try {
+          const errData = await res.json();
+          if (errData.error) errorMsg = errData.error;
+        } catch {
+          if (res.status === 413) {
+            errorMsg = 'Image file is too large. Please take or select a smaller photo.';
+          } else if (res.status === 504 || res.status === 502) {
+            errorMsg = 'Photo recognition server timed out. Please try again.';
+          }
+        }
+        setBannerMessage({ type: 'error', text: errorMsg });
+        return;
+      }
+
       const data = await res.json();
 
       let parsedInputs: { query: string; qty: number; unit?: string }[] = [];

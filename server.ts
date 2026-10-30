@@ -12,7 +12,8 @@ const __dirname = path.dirname(__filename);
 const app = express();
 const port = parseInt(process.env.PORT || '3000', 10);
 
-app.use(express.json({ limit: '25mb' }));
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
 function isValidGeminiKey(key: string | undefined): boolean {
   if (!key) return false;
@@ -122,7 +123,7 @@ Return ONLY a valid JSON object matching this schema:
 app.post('/api/parse-photo', async (req: Request, res: Response) => {
   const { imageBase64, mimeType, jobContext } = req.body;
   if (!imageBase64) {
-    return res.status(400).json({ error: 'Image data is required' });
+    return res.status(400).json({ success: false, error: 'Image data is required' });
   }
 
   const apiKey = process.env.GEMINI_API_KEY;
@@ -176,14 +177,23 @@ Return ONLY valid JSON matching this schema:
   ]
 }`;
 
-    // Clean base64 string
+    // Clean and validate base64 string
     const cleanBase64 = String(imageBase64)
       .replace(/^data:[^;]+;base64,/, '')
-      .replace(/\s+/g, '');
+      .replace(/[\r\n\s]+/g, '');
 
-    const validMimeType = mimeType && mimeType.startsWith('image/') ? mimeType : 'image/jpeg';
+    // Strictly normalize to Gemini-supported MIME types
+    let validMimeType = 'image/jpeg';
+    if (mimeType) {
+      const lower = mimeType.toLowerCase();
+      if (lower.includes('png')) validMimeType = 'image/png';
+      else if (lower.includes('webp')) validMimeType = 'image/webp';
+      else if (lower.includes('heic')) validMimeType = 'image/heic';
+      else if (lower.includes('heif')) validMimeType = 'image/heif';
+      else validMimeType = 'image/jpeg';
+    }
 
-    const response = await ai.models.generateContent({
+    const generatePromise = ai.models.generateContent({
       model: 'gemini-3.1-flash-lite',
       contents: [
         {
@@ -204,6 +214,12 @@ Return ONLY valid JSON matching this schema:
       },
     });
 
+    // 25 second timeout safeguard
+    const timeoutPromise = new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error('AI vision processing timed out after 25s')), 25000)
+    );
+
+    const response = (await Promise.race([generatePromise, timeoutPromise])) as any;
     const parsedData = cleanJsonText(response.text || '{}');
 
     return res.json({
@@ -214,12 +230,39 @@ Return ONLY valid JSON matching this schema:
     });
   } catch (error: any) {
     console.warn('Photo OCR error:', error?.message || error);
+    let errorMessage = 'Could not process the photo. Please make sure the handwriting is visible.';
+    const msg = error?.message || '';
+    if (msg.includes('timed out')) {
+      errorMessage = 'Image recognition timed out. Please try a clearer photo or use the Text / Table input.';
+    } else if (msg.includes('API key') || msg.includes('API_KEY')) {
+      errorMessage = 'Invalid or unconfigured Gemini API key. Please use the Text or Table input.';
+    } else if (msg.includes('quota') || msg.includes('429')) {
+      errorMessage = 'Recognition service is busy. Please try again in a few moments.';
+    } else if (msg.includes('Unable to process input image')) {
+      errorMessage = 'The uploaded image format could not be processed. Please upload a clear JPG or PNG photo.';
+    }
+
     return res.json({
       success: false,
-      error: error?.message || 'Error processing image',
+      error: errorMessage,
       items: null,
     });
   }
+});
+
+// Express global error handler to prevent HTML error responses
+app.use((err: any, _req: Request, res: Response, _next: any) => {
+  console.warn('Express request error:', err?.message || err);
+  if (err?.type === 'entity.too.large') {
+    return res.status(413).json({
+      success: false,
+      error: 'Image file is too large. Please select a photo under 25MB.',
+    });
+  }
+  return res.status(500).json({
+    success: false,
+    error: 'An internal server error occurred processing the request.',
+  });
 });
 
 // Setup Vite or static serving
