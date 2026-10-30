@@ -32,6 +32,10 @@ export const App: React.FC = () => {
   // Multimodal Photo State
   const [photoDataUrl, setPhotoDataUrl] = useState<string | null>(null);
   const [detectedPhotoNotes, setDetectedPhotoNotes] = useState<string | null>(null);
+  const [bannerMessage, setBannerMessage] = useState<{
+    type: 'error' | 'info' | 'success';
+    text: string;
+  } | null>(null);
 
   // Results State
   const [matchedItems, setMatchedItems] = useState<MatchedResultItem[]>([]);
@@ -82,6 +86,10 @@ export const App: React.FC = () => {
     setMode('text');
     setOrderText('50ft 10/2 MC cable, 12 Caddy CJ6, 5 1in EMT connectors');
     setJobContext('Commercial Office Trim');
+    setBannerMessage({
+      type: 'info',
+      text: 'Demo contractor order loaded. Click "AI Match & Process Order" to test.',
+    });
   };
 
   const handleReset = () => {
@@ -90,13 +98,17 @@ export const App: React.FC = () => {
     setUploadedFileName(null);
     setPhotoDataUrl(null);
     setDetectedPhotoNotes(null);
+    setBannerMessage(null);
     setTableRows([{ id: 'row-1', description: '', qty: 1 }]);
     setMatchedItems([]);
   };
 
   const handleProcessOrder = async () => {
     if (catalog.length === 0) {
-      alert('Catalog is still loading. Please wait a moment and try again.');
+      setBannerMessage({
+        type: 'error',
+        text: 'Catalog is still loading. Please wait a moment and try again.',
+      });
       return;
     }
 
@@ -112,11 +124,15 @@ export const App: React.FC = () => {
     } else {
       const rawText = orderText.trim();
       if (!rawText) {
-        alert('Please enter items to order.');
+        setBannerMessage({
+          type: 'error',
+          text: 'Please enter items to order.',
+        });
         return;
       }
 
       setIsProcessing(true);
+      setBannerMessage(null);
 
       // Attempt AI smart parsing if Gemini is active
       if (hasGeminiKey) {
@@ -157,7 +173,10 @@ export const App: React.FC = () => {
 
     if (parsedInputs.length === 0) {
       setIsProcessing(false);
-      alert('Please enter items to order.');
+      setBannerMessage({
+        type: 'error',
+        text: 'Please enter items to order.',
+      });
       return;
     }
 
@@ -172,6 +191,10 @@ export const App: React.FC = () => {
       setMatchedItems(results);
     } catch (err) {
       console.error('Error during matching:', err);
+      setBannerMessage({
+        type: 'error',
+        text: 'Error occurred while matching catalog items.',
+      });
     } finally {
       setIsProcessing(false);
     }
@@ -179,11 +202,15 @@ export const App: React.FC = () => {
 
   const handleProcessPhoto = async (base64: string, mimeType: string) => {
     if (catalog.length === 0) {
-      alert('Catalog is still loading. Please wait a moment.');
+      setBannerMessage({
+        type: 'error',
+        text: 'Catalog is still loading. Please wait a moment.',
+      });
       return;
     }
 
     setIsProcessing(true);
+    setBannerMessage(null);
 
     try {
       const res = await fetch('/api/parse-photo', {
@@ -194,16 +221,53 @@ export const App: React.FC = () => {
 
       const data = await res.json();
 
+      let parsedInputs: { query: string; qty: number; unit?: string }[] = [];
+
       if (data.success && Array.isArray(data.items) && data.items.length > 0) {
         setDetectedPhotoNotes(data.transcribedNotes || 'Extracted items from jobsite photo');
 
-        const parsedInputs = data.items.map((it: any) => ({
+        parsedInputs = data.items.map((it: any) => ({
           query: it.query || it.originalText,
           qty: parseInt(it.qty, 10) || 1,
           unit: it.unit || '',
         }));
+      } else if (data.success && data.transcribedNotes) {
+        // Fallback: If AI returned transcribed notes but items array was empty,
+        // extract materials from the transcribed notes using our line parser
+        setDetectedPhotoNotes(data.transcribedNotes);
+        const lines = String(data.transcribedNotes).split(/\r?\n|•|,/);
+        lines.forEach((line) => {
+          const trimmed = line.trim();
+          if (trimmed.length > 2) {
+            const parsed = parseInputLine(trimmed);
+            if (parsed.query && parsed.query.length > 1) {
+              parsedInputs.push(parsed);
+            }
+          }
+        });
 
-        const results: MatchedResultItem[] = parsedInputs.map((input: any) =>
+        if (parsedInputs.length === 0) {
+          // If no items could be parsed, prefill the text tab so user can review and edit
+          setOrderText(data.transcribedNotes);
+          setMode('text');
+          setBannerMessage({
+            type: 'info',
+            text: `Detected text: "${data.transcribedNotes}". Switched to Text tab so you can review and match.`,
+          });
+          return;
+        }
+      } else {
+        setBannerMessage({
+          type: 'error',
+          text:
+            data.error ||
+            'Could not extract text from image. Make sure the handwriting is clear and well-lit, or type items in Text mode.',
+        });
+        return;
+      }
+
+      if (parsedInputs.length > 0) {
+        const results: MatchedResultItem[] = parsedInputs.map((input) =>
           matchQueryAgainstCatalog(
             input.query,
             input.qty,
@@ -215,15 +279,17 @@ export const App: React.FC = () => {
         );
 
         setMatchedItems(results);
-      } else {
-        alert(
-          data.error ||
-            'Could not extract text from image. Make sure the handwriting is clear and well-lit.'
-        );
+        setBannerMessage({
+          type: 'success',
+          text: `Successfully matched ${results.length} items from your jobsite photo!`,
+        });
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error('Error processing photo:', err);
-      alert('Failed to connect to the photo recognition server.');
+      setBannerMessage({
+        type: 'error',
+        text: 'Failed to process the photo. Please check your network connection or try typing items directly.',
+      });
     } finally {
       setIsProcessing(false);
     }
@@ -249,6 +315,10 @@ export const App: React.FC = () => {
     };
 
     setMatchedItems((prev) => [newItem, ...prev]);
+    setBannerMessage({
+      type: 'success',
+      text: `Added "${product.clean_title || product.PRODUCT}" to order.`,
+    });
   };
 
   const handleUpdateQty = (id: string, newQty: number) => {
@@ -314,6 +384,8 @@ export const App: React.FC = () => {
               setPhotoDataUrl={setPhotoDataUrl}
               onProcessPhoto={handleProcessPhoto}
               detectedPhotoNotes={detectedPhotoNotes}
+              bannerMessage={bannerMessage}
+              setBannerMessage={setBannerMessage}
             />
           </div>
 

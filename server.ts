@@ -27,6 +27,23 @@ app.get('/api/health', (_req: Request, res: Response) => {
   res.json({ status: 'ok', hasGeminiKey: hasValidKey });
 });
 
+function cleanJsonText(raw: string): any {
+  if (!raw) return {};
+  const trimmed = raw.trim();
+  // Strip ```json and ``` if present
+  const unquoted = trimmed.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
+  try {
+    return JSON.parse(unquoted);
+  } catch (err) {
+    // If it still fails, search for the outer JSON object {...}
+    const match = unquoted.match(/\{[\s\S]*\}/);
+    if (match) {
+      return JSON.parse(match[0]);
+    }
+    throw err;
+  }
+}
+
 // AI Order Text Parsing endpoint
 app.post('/api/parse-order', async (req: Request, res: Response) => {
   const { text, jobContext } = req.body;
@@ -84,8 +101,7 @@ Return ONLY a valid JSON object matching this schema:
       },
     });
 
-    const responseText = response.text || '{}';
-    const parsedData = JSON.parse(responseText);
+    const parsedData = cleanJsonText(response.text || '{}');
 
     return res.json({
       success: true,
@@ -105,15 +121,15 @@ Return ONLY a valid JSON object matching this schema:
 // Multimodal Photo / Drywall Scribble OCR Parsing endpoint
 app.post('/api/parse-photo', async (req: Request, res: Response) => {
   const { imageBase64, mimeType, jobContext } = req.body;
-  if (!imageBase64 || !mimeType) {
-    return res.status(400).json({ error: 'Image data and mimeType are required' });
+  if (!imageBase64) {
+    return res.status(400).json({ error: 'Image data is required' });
   }
 
   const apiKey = process.env.GEMINI_API_KEY;
   if (!isValidGeminiKey(apiKey)) {
     return res.json({
       success: false,
-      error: 'Photo AI recognition requires an active Google AI Studio Gemini API key (AIzaSy...). Please enter your materials using the Text / Voice or Table tabs.',
+      error: 'Photo AI recognition requires an active Google AI Studio Gemini API key. Please use the Text or Table input tabs.',
       items: null,
     });
   }
@@ -125,18 +141,27 @@ Examine this photo carefully. It may be:
 - A handwritten material note on a scrap of drywall, 2x4 lumber, or cardboard
 - A handwritten yellow legal pad or notebook list
 - A printed blueprint note, material requisition sheet, or invoice snippet
+- A photo of electrical supplies or jobsite materials
 
-Extract each distinct electrical item that the contractor needs.
-Transcribe trade slang (e.g. "12/2 romex", "1/2 emt straps", "1900 box with 1/2 mud ring", "caddy clips", "3-way switches", "ground rods", "wire nuts").
+Carefully read all handwriting or printed text. Extract every distinct electrical material or supply item the contractor needs.
+Understand trade slang and abbreviations:
+- MC / metal clad / armored cable (e.g. "12/2 mc", "10/3 mc", "8/3")
+- Romex / NM-B (e.g. "14/2 romex", "12/2 nm-b")
+- EMT conduit, connectors, couplings, straps (e.g. "1/2 emt", "3/4 compression conn", "1in set screw")
+- Caddy / fasteners (e.g. "cj6", "caddy clip", "k16", "batwings")
+- Boxes & covers (e.g. "1900 box", "4-square", "mud ring", "handy box")
+- Wire nuts / connectors (e.g. "yellows", "reds", "tans", "twister")
+- Breakers, panels, ground rods, strut, etc.
+
 Job context if provided: "${jobContext || 'General electrical job'}".
 
 For each item, output:
-- query: clean search term for Blazer Electric's catalog
-- qty: number
-- unit: unit of measure if written (e.g., "ft", "boxes", "rolls", "pcs", "ea")
-- originalText: exact handwritten or printed text detected on the image
+- query: A clean, descriptive search term for Blazer Electric's catalog (e.g. "10/2 MC cable", "Caddy CJ6", "3/4 inch EMT compression connector")
+- qty: The numerical quantity (e.g. 50, 12, 10, 100). Default to 1 if not specified.
+- unit: Unit of measure if mentioned (e.g. "ft", "boxes", "rolls", "pcs", "ea", "spools")
+- originalText: The exact text snippet detected on the image
 
-Also provide a brief summary of the detected note in 'transcribedNotes'.
+Also provide a concise transcript or summary of the entire note in 'transcribedNotes'.
 
 Return ONLY valid JSON matching this schema:
 {
@@ -151,7 +176,12 @@ Return ONLY valid JSON matching this schema:
   ]
 }`;
 
-    const cleanBase64 = imageBase64.replace(/^data:image\/[a-z]+;base64,/, '');
+    // Clean base64 string
+    const cleanBase64 = String(imageBase64)
+      .replace(/^data:[^;]+;base64,/, '')
+      .replace(/\s+/g, '');
+
+    const validMimeType = mimeType && mimeType.startsWith('image/') ? mimeType : 'image/jpeg';
 
     const response = await ai.models.generateContent({
       model: 'gemini-3.1-flash-lite',
@@ -163,7 +193,7 @@ Return ONLY valid JSON matching this schema:
             {
               inlineData: {
                 data: cleanBase64,
-                mimeType: mimeType || 'image/jpeg',
+                mimeType: validMimeType,
               },
             },
           ],
@@ -174,12 +204,11 @@ Return ONLY valid JSON matching this schema:
       },
     });
 
-    const responseText = response.text || '{}';
-    const parsedData = JSON.parse(responseText);
+    const parsedData = cleanJsonText(response.text || '{}');
 
     return res.json({
       success: true,
-      items: parsedData.items || [],
+      items: Array.isArray(parsedData.items) ? parsedData.items : [],
       transcribedNotes: parsedData.transcribedNotes || '',
       usedAi: true,
     });

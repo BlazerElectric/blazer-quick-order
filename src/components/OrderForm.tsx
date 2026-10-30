@@ -13,8 +13,11 @@ import {
   Camera,
   Image as ImageIcon,
   Sparkles,
+  AlertCircle,
+  CheckCircle2,
 } from 'lucide-react';
 import { OrderInputRow } from '../types';
+import { compressAndNormalizeImage, createSampleJobsiteNote } from '../utils/imageUtils';
 
 interface OrderFormProps {
   jobContext: string;
@@ -34,6 +37,8 @@ interface OrderFormProps {
   setPhotoDataUrl: (url: string | null) => void;
   onProcessPhoto: (base64: string, mimeType: string) => Promise<void>;
   detectedPhotoNotes: string | null;
+  bannerMessage: { type: 'error' | 'info' | 'success'; text: string } | null;
+  setBannerMessage: (msg: { type: 'error' | 'info' | 'success'; text: string } | null) => void;
 }
 
 export const OrderForm: React.FC<OrderFormProps> = ({
@@ -54,8 +59,13 @@ export const OrderForm: React.FC<OrderFormProps> = ({
   setPhotoDataUrl,
   onProcessPhoto,
   detectedPhotoNotes,
+  bannerMessage,
+  setBannerMessage,
 }) => {
   const [isListening, setIsListening] = useState(false);
+  const [isCompressing, setIsCompressing] = useState(false);
+  const [photoPayload, setPhotoPayload] = useState<{ base64: string; mimeType: string } | null>(null);
+
   const recognitionRef = useRef<any>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const cameraInputRef = useRef<HTMLInputElement>(null);
@@ -65,7 +75,10 @@ export const OrderForm: React.FC<OrderFormProps> = ({
       (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
 
     if (!SpeechRecognition) {
-      alert('Speech recognition is not supported in this browser.');
+      setBannerMessage({
+        type: 'error',
+        text: 'Speech recognition is not supported in this browser. Please type or paste your materials.',
+      });
       return;
     }
 
@@ -148,41 +161,97 @@ export const OrderForm: React.FC<OrderFormProps> = ({
       if (content) {
         setOrderText(content);
         setMode('text');
+        setBannerMessage({
+          type: 'info',
+          text: `Loaded order file: ${file.name}`,
+        });
       }
     };
     reader.readAsText(file);
   };
 
-  const handlePhotoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handlePhotoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    const reader = new FileReader();
-    reader.onload = (event) => {
-      const dataUrl = event.target?.result as string;
+    setIsCompressing(true);
+    setBannerMessage(null);
+
+    try {
+      const { base64, mimeType, dataUrl } = await compressAndNormalizeImage(file);
       setPhotoDataUrl(dataUrl);
-    };
-    reader.readAsDataURL(file);
+      setPhotoPayload({ base64, mimeType });
+    } catch (err: any) {
+      console.error('Error optimizing image:', err);
+      setBannerMessage({
+        type: 'error',
+        text: 'Could not process the selected image file. Please try another photo.',
+      });
+    } finally {
+      setIsCompressing(false);
+      // Reset input value so re-selecting same file triggers onChange
+      if (e.target) e.target.value = '';
+    }
+  };
+
+  const handleLoadSampleDrywall = () => {
+    try {
+      const sample = createSampleJobsiteNote();
+      setPhotoDataUrl(sample.dataUrl);
+      setPhotoPayload({ base64: sample.base64, mimeType: sample.mimeType });
+      setJobContext('Suite 200 Trim - Commercial Tenant Finish');
+      setBannerMessage({
+        type: 'success',
+        text: 'Sample handwritten drywall note loaded. Click "Scan & Match Photo" to test AI extraction!',
+      });
+    } catch (err) {
+      console.error('Failed to generate sample note:', err);
+    }
   };
 
   const handleTriggerPhotoScan = () => {
-    if (!photoDataUrl) {
-      alert('Please select or take a photo first.');
+    if (!photoDataUrl || !photoPayload) {
+      setBannerMessage({
+        type: 'error',
+        text: 'Please snap a photo or upload an image first.',
+      });
       return;
     }
-    const match = photoDataUrl.match(/^data:([^;]+);base64,(.+)$/);
-    if (!match) {
-      alert('Invalid image format.');
-      return;
-    }
-    const mimeType = match[1];
-    const base64 = match[2];
-    onProcessPhoto(base64, mimeType);
+    setBannerMessage(null);
+    onProcessPhoto(photoPayload.base64, photoPayload.mimeType);
   };
 
   return (
     <section className="bg-white p-6 rounded-xl shadow-xs border border-gray-200 flex flex-col justify-between">
       <div className="space-y-5">
+        {/* Banner Message (Error / Info) */}
+        {bannerMessage && (
+          <div
+            className={`p-3 rounded-lg text-xs font-semibold flex items-start justify-between gap-2 border animate-fade-in ${
+              bannerMessage.type === 'error'
+                ? 'bg-red-50 text-red-800 border-red-200'
+                : bannerMessage.type === 'success'
+                ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                : 'bg-blue-50 text-[#002d72] border-blue-200'
+            }`}
+          >
+            <div className="flex items-start gap-2">
+              {bannerMessage.type === 'error' ? (
+                <AlertCircle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
+              ) : (
+                <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+              )}
+              <span>{bannerMessage.text}</span>
+            </div>
+            <button
+              onClick={() => setBannerMessage(null)}
+              className="text-gray-400 hover:text-gray-700 font-bold ml-1 cursor-pointer"
+            >
+              ✕
+            </button>
+          </div>
+        )}
+
         {/* Job Context */}
         <div>
           <label className="block text-xs font-bold text-gray-700 uppercase tracking-wider mb-1">
@@ -205,7 +274,10 @@ export const OrderForm: React.FC<OrderFormProps> = ({
           <div className="grid grid-cols-4 gap-1 bg-gray-100 p-1 rounded-lg text-xs font-bold text-center">
             <button
               type="button"
-              onClick={() => setMode('text')}
+              onClick={() => {
+                setMode('text');
+                setBannerMessage(null);
+              }}
               className={`py-2 rounded-md transition flex items-center justify-center gap-1 cursor-pointer ${
                 mode === 'text'
                   ? 'bg-white text-[#002d72] shadow-xs font-bold'
@@ -217,7 +289,10 @@ export const OrderForm: React.FC<OrderFormProps> = ({
             </button>
             <button
               type="button"
-              onClick={() => setMode('table')}
+              onClick={() => {
+                setMode('table');
+                setBannerMessage(null);
+              }}
               className={`py-2 rounded-md transition flex items-center justify-center gap-1 cursor-pointer ${
                 mode === 'table'
                   ? 'bg-white text-[#002d72] shadow-xs font-bold'
@@ -229,7 +304,10 @@ export const OrderForm: React.FC<OrderFormProps> = ({
             </button>
             <button
               type="button"
-              onClick={() => setMode('file')}
+              onClick={() => {
+                setMode('file');
+                setBannerMessage(null);
+              }}
               className={`py-2 rounded-md transition flex items-center justify-center gap-1 cursor-pointer ${
                 mode === 'file'
                   ? 'bg-white text-[#002d72] shadow-xs font-bold'
@@ -241,7 +319,10 @@ export const OrderForm: React.FC<OrderFormProps> = ({
             </button>
             <button
               type="button"
-              onClick={() => setMode('photo')}
+              onClick={() => {
+                setMode('photo');
+                setBannerMessage(null);
+              }}
               className={`py-2 rounded-md transition flex items-center justify-center gap-1 cursor-pointer ${
                 mode === 'photo'
                   ? 'bg-white text-[#002d72] shadow-xs font-bold'
@@ -400,38 +481,63 @@ export const OrderForm: React.FC<OrderFormProps> = ({
             </div>
 
             {!photoDataUrl ? (
-              <div
-                onClick={() => cameraInputRef.current?.click()}
-                className="border-2 border-dashed border-amber-300 bg-amber-50/40 rounded-xl p-6 text-center hover:bg-amber-50 transition cursor-pointer"
-              >
-                <input
-                  ref={cameraInputRef}
-                  type="file"
-                  accept="image/*"
-                  capture="environment"
-                  className="hidden"
-                  onChange={handlePhotoUpload}
-                />
-                <Camera className="w-8 h-8 text-amber-600 mx-auto mb-2" />
-                <p className="text-xs text-gray-700 font-bold">
-                  Snap photo or upload image
-                </p>
-                <p className="text-[11px] text-gray-500 mt-1">
-                  Works with drywall pencil scribbles, handwritten legal pads, or printed tickets
-                </p>
+              <div className="space-y-2">
+                <div
+                  onClick={() => cameraInputRef.current?.click()}
+                  className="border-2 border-dashed border-amber-300 bg-amber-50/40 rounded-xl p-6 text-center hover:bg-amber-50 transition cursor-pointer"
+                >
+                  <input
+                    ref={cameraInputRef}
+                    type="file"
+                    accept="image/*"
+                    capture="environment"
+                    className="hidden"
+                    onChange={handlePhotoUpload}
+                  />
+                  {isCompressing ? (
+                    <div className="py-2">
+                      <span className="w-6 h-6 border-2 border-amber-600 border-t-transparent rounded-full animate-spin inline-block mb-2"></span>
+                      <p className="text-xs text-amber-800 font-bold">Optimizing photo for fast AI analysis...</p>
+                    </div>
+                  ) : (
+                    <>
+                      <Camera className="w-8 h-8 text-amber-600 mx-auto mb-2" />
+                      <p className="text-xs text-gray-700 font-bold">
+                        Snap photo or upload image
+                      </p>
+                      <p className="text-[11px] text-gray-500 mt-1">
+                        Works with drywall pencil scribbles, handwritten legal pads, or printed tickets
+                      </p>
+                    </>
+                  )}
+                </div>
+
+                <div className="flex items-center justify-between pt-1">
+                  <span className="text-[11px] text-gray-400">Testing without a photo?</span>
+                  <button
+                    type="button"
+                    onClick={handleLoadSampleDrywall}
+                    className="text-xs text-[#002d72] hover:text-[#1e3a8a] font-bold hover:underline flex items-center gap-1 cursor-pointer bg-blue-50 px-2.5 py-1 rounded-md border border-blue-200"
+                  >
+                    <Sparkles className="w-3 h-3 text-amber-500" />
+                    Load Sample Jobsite Note
+                  </button>
+                </div>
               </div>
             ) : (
               <div className="space-y-2">
-                <div className="relative rounded-xl overflow-hidden border border-gray-200 bg-black/5 flex items-center justify-center max-h-44">
+                <div className="relative rounded-xl overflow-hidden border border-gray-200 bg-black/5 flex items-center justify-center max-h-48">
                   <img
                     src={photoDataUrl}
                     alt="Jobsite Note"
-                    className="object-contain max-h-44 w-auto"
+                    className="object-contain max-h-48 w-auto rounded-lg"
                   />
                   <button
                     type="button"
                     onClick={() => {
                       setPhotoDataUrl(null);
+                      setPhotoPayload(null);
+                      setBannerMessage(null);
                     }}
                     className="absolute top-2 right-2 bg-red-600/90 hover:bg-red-700 text-white p-1 rounded-md text-xs cursor-pointer shadow-xs"
                     title="Remove photo"
@@ -448,16 +554,23 @@ export const OrderForm: React.FC<OrderFormProps> = ({
                   >
                     <ImageIcon className="w-3.5 h-3.5" /> Change Photo
                   </button>
+                  <button
+                    type="button"
+                    onClick={handleLoadSampleDrywall}
+                    className="text-gray-500 hover:text-[#002d72] font-medium hover:underline flex items-center gap-1 cursor-pointer"
+                  >
+                    Load Sample Note
+                  </button>
                 </div>
               </div>
             )}
 
             {detectedPhotoNotes && (
-              <div className="p-2.5 bg-blue-50/70 border border-blue-200 rounded-lg text-xs text-gray-700 space-y-1">
+              <div className="p-3 bg-blue-50/80 border border-blue-200 rounded-lg text-xs text-gray-700 space-y-1">
                 <div className="font-bold text-[#002d72] flex items-center gap-1">
-                  <Sparkles className="w-3 h-3 text-amber-500" /> Detected Handwriting:
+                  <Sparkles className="w-3.5 h-3.5 text-amber-500" /> Detected Handwriting / Note:
                 </div>
-                <p className="font-mono text-[11px] text-gray-800 italic">
+                <p className="font-mono text-[11px] text-gray-800 italic leading-relaxed">
                   &quot;{detectedPhotoNotes}&quot;
                 </p>
               </div>
@@ -470,7 +583,10 @@ export const OrderForm: React.FC<OrderFormProps> = ({
       <div className="mt-6 flex gap-2 pt-4 border-t border-gray-100">
         <button
           type="button"
-          onClick={onReset}
+          onClick={() => {
+            onReset();
+            setBannerMessage(null);
+          }}
           className="w-1/3 bg-gray-200 hover:bg-gray-300 text-gray-700 font-bold py-3 px-4 rounded-lg transition text-xs flex items-center justify-center gap-1.5 cursor-pointer"
         >
           <RotateCcw className="w-3.5 h-3.5" />
@@ -480,14 +596,14 @@ export const OrderForm: React.FC<OrderFormProps> = ({
         {mode === 'photo' ? (
           <button
             type="button"
-            disabled={isProcessing || !photoDataUrl}
+            disabled={isProcessing || isCompressing || !photoDataUrl}
             onClick={handleTriggerPhotoScan}
             className="w-2/3 bg-amber-600 hover:bg-amber-700 disabled:opacity-50 text-white font-bold py-3 px-4 rounded-lg shadow-xs transition flex items-center justify-center gap-2 text-xs cursor-pointer"
           >
             {isProcessing ? (
               <>
                 <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></span>
-                Scanning Photo...
+                Scanning Photo with AI...
               </>
             ) : (
               <>
